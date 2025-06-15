@@ -3,7 +3,11 @@
   "builds": [
     {
       "src": "api/bot.py",
-      "use": "@vercel/python"
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "15mb",
+        "includeFiles": ["api/**"]
+      }
     }
   ],
   "routes": [
@@ -13,7 +17,7 @@
       "methods": ["POST"]
     },
     {
-      "src": "/.*",
+      "src": "/",
       "dest": "/api/bot.py",
       "methods": ["GET"]
     }
