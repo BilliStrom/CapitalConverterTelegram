@@ -1,4 +1,4 @@
-const { Telegraf, session } = require('telegraf');
+const { Telegraf } = require('telegraf');
 const axios = require('axios');
 
 // Фикс для вебхуков на Vercel
@@ -12,8 +12,20 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
   }
 });
 
-// Используем встроенные сессии в памяти
-bot.use(session());
+// Простая реализация сессий в памяти (без записи на диск)
+const userSessions = {};
+
+bot.use((ctx, next) => {
+  const userId = ctx.from?.id;
+  if (userId) {
+    // Инициализируем сессию пользователя
+    if (!userSessions[userId]) {
+      userSessions[userId] = {};
+    }
+    ctx.session = userSessions[userId];
+  }
+  return next();
+});
 
 // Начальные данные
 const cryptoData = {
@@ -68,10 +80,9 @@ bot.command('rates', async ctx => {
 
 // Команда /exchange
 bot.command('exchange', ctx => {
-  // Инициализируем сессию если нужно
   if (!ctx.session) ctx.session = {};
-  
   ctx.session.step = 'select_pair';
+  
   ctx.reply('🔄 Выберите направление обмена:', {
     reply_markup: {
       inline_keyboard: [
@@ -212,7 +223,9 @@ bot.on('text', async (ctx) => {
 ⏱️ Ордер будет активен 60 минут`);
 
   // Сбрасываем сессию
-  ctx.session = null;
+  if (ctx.from?.id) {
+    delete userSessions[ctx.from.id];
+  }
 });
 
 // Команда /help
