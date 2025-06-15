@@ -1,5 +1,6 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
+const LocalSession = require('telegraf-session-local'); // Добавляем локальные сессии
 
 // Фикс для вебхуков на Vercel
 process.env.NTBA_FIX_319 = "1";
@@ -12,8 +13,9 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
   }
 });
 
-// Включаем сессии
-bot.use(Telegraf.session());
+// Инициализация сессий
+const session = new LocalSession({ database: 'session.json' });
+bot.use(session.middleware());
 
 // Начальные данные
 const cryptoData = {
@@ -23,7 +25,7 @@ const cryptoData = {
   LTC: { name: "Litecoin", wallet: "LcWJv3djruGY4uh7xVPZyKxqJJUTdrzqN7" }
 };
 
-// Курсы обмена (можно заменить на API)
+// Курсы обмена
 const exchangeRates = {
   BTC_USDT: 63000,
   ETH_USDT: 3500,
@@ -68,7 +70,7 @@ bot.command('rates', async ctx => {
 
 // Команда /exchange
 bot.command('exchange', ctx => {
-  ctx.session = { step: 'select_pair' };
+  ctx.session.step = 'select_pair';
   ctx.reply('🔄 Выберите направление обмена:', {
     reply_markup: {
       inline_keyboard: [
@@ -110,7 +112,7 @@ bot.action('more_pairs', ctx => {
 });
 
 bot.action('back_to_main', ctx => {
-  ctx.session = { step: 'select_pair' };
+  ctx.session.step = 'select_pair';
   ctx.editMessageText('🔄 Выберите направление обмена:', {
     reply_markup: {
       inline_keyboard: [
@@ -135,11 +137,9 @@ bot.action(/^pair_(\w+)_(\w+)$/, async (ctx) => {
   const [, from, to] = ctx.match;
   
   // Сохраняем в сессию
-  ctx.session = {
-    step: 'enter_amount',
-    from: from.toUpperCase(),
-    to: to.toUpperCase()
-  };
+  ctx.session.step = 'enter_amount';
+  ctx.session.from = from.toUpperCase();
+  ctx.session.to = to.toUpperCase();
   
   await ctx.deleteMessage();
   ctx.reply(`💱 Вы выбрали: ${from.toUpperCase()} → ${to.toUpperCase()}\n\nВведите сумму ${from.toUpperCase()} для обмена:`);
@@ -151,7 +151,7 @@ bot.on('text', async (ctx) => {
   if (ctx.message.text.startsWith('/')) return;
   
   // Проверяем шаг
-  if (!ctx.session || ctx.session.step !== 'enter_amount') {
+  if (!ctx.session.step || ctx.session.step !== 'enter_amount') {
     return ctx.reply('Используйте /exchange для начала обмена');
   }
   
@@ -207,7 +207,7 @@ bot.on('text', async (ctx) => {
 ⏱️ Ордер будет активен 60 минут`);
 
   // Сбрасываем сессию
-  ctx.session = null;
+  ctx.session = {};
 });
 
 // Команда /help
