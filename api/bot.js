@@ -1,105 +1,72 @@
 const { Telegraf } = require('telegraf');
-const axios = require('axios');
 
-// Инициализация бота с логгированием
 const bot = new Telegraf(process.env.BOT_TOKEN, {
-  telegram: { 
-    testEnv: process.env.NODE_ENV === 'test',
-    webhookReply: false // Важно для Vercel!
+  telegram: {
+    webhookReply: false // ВАЖНО для Vercel!
   }
 });
 
-// Добавляем логгирование всех событий
+// Включаем сессии
+bot.use(Telegraf.session());
+
+// Логгирование всех входящих запросов
 bot.use(async (ctx, next) => {
   console.log('Received update:', JSON.stringify(ctx.update, null, 2));
   await next();
 });
 
-// Фиксированные курсы
-const rates = {
-  BTC_USD: 63000,
-  ETH_USD: 3500,
-  USDC_USD: 1,
-  BTC_ETH: 0.055,
-  ETH_BTC: 18.18
-};
-
-bot.start(ctx => {
-  console.log(`/start from ${ctx.from.id}`);
-  return ctx.reply(`🪙 Добро пожаловать! Используйте /exchange`);
-});
+// Команды
+bot.start(ctx => ctx.reply('🪙 Бот активирован! Используйте /exchange'));
 
 bot.command('exchange', ctx => {
-  console.log(`/exchange from ${ctx.from.id}`);
-  ctx.reply('🔁 Выберите пару:', {
+  ctx.reply('Выберите пару:', {
     reply_markup: {
       inline_keyboard: [
-        [
-          { 
-            text: 'BTC → USDC', 
-            callback_data: 'pair_BTC_USDC' 
-          },
-          { 
-            text: 'ETH → BTC', 
-            callback_data: 'pair_ETH_BTC' 
-          }
-        ]
+        [{ text: 'BTC → USDC', callback_data: 'BTC_USDC' }]
       ]
     }
   });
 });
 
-// Обработка кнопок с логгированием
-bot.action(/^pair_(\w+)_(\w+)$/, async (ctx) => {
-  const [, from, to] = ctx.match;
-  console.log(`Action received: ${from}_${to} from ${ctx.from.id}`);
-  
-  await ctx.editMessageText(`Выбрано: ${from} → ${to}\nВведите сумму:`);
-  
-  // Сохраняем состояние
-  ctx.session = { action: 'exchange', from, to };
+// Обработчик кнопок
+bot.action('BTC_USDC', ctx => {
+  ctx.editMessageText('Введите сумму BTC:');
+  ctx.session = { action: 'exchange', pair: 'BTC_USDC' };
 });
 
-// Обработка текста с проверкой состояния
-bot.on('text', async (ctx) => {
-  console.log(`Text received: "${ctx.message.text}" from ${ctx.from.id}`);
-  
-  if (!ctx.session?.action) {
-    return ctx.reply('Используйте /exchange для начала');
+// Обработчик текста
+bot.on('text', ctx => {
+  if (ctx.session?.action === 'exchange') {
+    const amount = parseFloat(ctx.message.text);
+    if (isNaN(amount)) {
+      return ctx.reply('Введите число!');
+    }
+    ctx.reply(`✅ Вы ввели: ${amount} BTC`);
+    ctx.session = null;
   }
-  
-  const amount = parseFloat(ctx.message.text);
-  if (isNaN(amount)) {
-    return ctx.reply('Введите число!');
-  }
-  
-  const { from, to } = ctx.session;
-  const pair = `${from}_${to}`;
-  
-  if (!rates[pair]) {
-    return ctx.reply('Курс не найден');
-  }
-  
-  const result = (amount * rates[pair]).toFixed(6);
-  console.log(`Calculated exchange: ${amount} ${from} = ${result} ${to}`);
-  
-  ctx.reply(`✅ Результат: ${amount} ${from} = ${result} ${to}`);
-  ctx.session = null;
 });
 
-// Обработчик для Vercel с логгированием
+// Vercel handler (КРИТИЧЕСКИ ВАЖНО)
 module.exports = async (req, res) => {
   try {
+    // Логируем входящий запрос
     console.log('Incoming request:', req.method, req.url);
     
     if (req.method === 'POST') {
       console.log('Request body:', JSON.stringify(req.body, null, 2));
       await bot.handleUpdate(req.body, res);
     } else {
-      res.status(200).send('Bot is running');
+      // Для GET запросов
+      res.status(200).json({
+        status: 'alive',
+        message: 'Bot is running'
+      });
     }
   } catch (err) {
-    console.error('FATAL ERROR:', err.stack);
+    console.error('FATAL ERROR:', err);
     res.status(500).json({ error: err.message });
   }
 };
+
+// Проверка инициализации
+console.log('Bot initialized');
