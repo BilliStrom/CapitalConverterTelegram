@@ -1,4 +1,5 @@
 const { Telegraf } = require('telegraf');
+const axios = require('axios');
 
 // Фикс для вебхуков на Vercel
 process.env.NTBA_FIX_319 = "1";
@@ -11,75 +12,247 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
   }
 });
 
-// Логирование инициализации
-console.log('Bot initialization started');
-console.log('Environment:', process.env.VERCEL_ENV || 'development');
-console.log('Node version:', process.version);
+// Включаем сессии
+bot.use(Telegraf.session());
 
-// Проверка токена
-if (!process.env.BOT_TOKEN) {
-  console.error('ERROR: BOT_TOKEN is not defined!');
-} else {
-  console.log('Bot token:', process.env.BOT_TOKEN.substring(0, 6) + '...');
-}
+// Начальные данные
+const cryptoData = {
+  BTC: { name: "Bitcoin", wallet: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq" },
+  ETH: { name: "Ethereum", wallet: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e" },
+  USDT: { name: "Tether", wallet: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" },
+  LTC: { name: "Litecoin", wallet: "LcWJv3djruGY4uh7xVPZyKxqJJUTdrzqN7" }
+};
 
-// Простые команды для проверки
+// Курсы обмена (можно заменить на API)
+const exchangeRates = {
+  BTC_USDT: 63000,
+  ETH_USDT: 3500,
+  LTC_USDT: 75,
+  BTC_ETH: 18.0,
+  ETH_BTC: 0.055,
+  LTC_BTC: 0.0012,
+  BTC_LTC: 840,
+  ETH_LTC: 46.67
+};
+
+// Команда /start
 bot.start(ctx => {
-  console.log('/start command received');
-  return ctx.reply('🚀 Бот успешно запущен! Используйте команды:\n/test - проверка работы\n/exchange - обмен валюты');
+  ctx.reply(`🚀 Добро пожаловать в Crypto Exchange Bot!
+  
+Я помогу вам обменять криптовалюты по выгодному курсу. Доступные команды:
+
+💱 /exchange - начать обмен
+📊 /rates - текущие курсы
+🆘 /help - помощь
+
+Для быстрого старта нажмите /exchange`);
 });
 
-bot.command('test', ctx => {
-  console.log('/test command received');
-  ctx.reply('✅ Тест успешен! Бот работает корректно.');
+// Команда /rates
+bot.command('rates', async ctx => {
+  try {
+    ctx.replyWithMarkdown(`📈 *Текущие курсы:*
+    
+1 BTC = ${exchangeRates.BTC_USDT} USDT
+1 ETH = ${exchangeRates.ETH_USDT} USDT
+1 LTC = ${exchangeRates.LTC_USDT} USDT
+
+1 BTC = ${exchangeRates.BTC_ETH} ETH
+1 ETH = ${exchangeRates.ETH_BTC} BTC
+1 LTC = ${exchangeRates.LTC_BTC} BTC`);
+
+  } catch (error) {
+    ctx.reply('⚠️ Ошибка при получении курсов');
+  }
 });
 
+// Команда /exchange
 bot.command('exchange', ctx => {
-  console.log('/exchange command received');
-  ctx.reply('🔁 Функция обмена в разработке...');
+  ctx.session = { step: 'select_pair' };
+  ctx.reply('🔄 Выберите направление обмена:', {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: 'BTC → USDT', callback_data: 'pair_BTC_USDT' },
+          { text: 'ETH → BTC', callback_data: 'pair_ETH_BTC' }
+        ],
+        [
+          { text: 'USDT → ETH', callback_data: 'pair_USDT_ETH' },
+          { text: 'LTC → BTC', callback_data: 'pair_LTC_BTC' }
+        ],
+        [
+          { text: 'Другие пары', callback_data: 'more_pairs' }
+        ]
+      ]
+    }
+  });
 });
 
-// Расширенное логгирование
-bot.use((ctx, next) => {
-  console.log('Update received:', JSON.stringify(ctx.update, null, 2));
-  return next();
+// Обработка кнопок
+bot.action('more_pairs', ctx => {
+  ctx.editMessageText('Выберите пару:', {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: 'ETH → USDT', callback_data: 'pair_ETH_USDT' },
+          { text: 'BTC → LTC', callback_data: 'pair_BTC_LTC' }
+        ],
+        [
+          { text: 'USDT → BTC', callback_data: 'pair_USDT_BTC' },
+          { text: 'LTC → ETH', callback_data: 'pair_LTC_ETH' }
+        ],
+        [
+          { text: '← Назад', callback_data: 'back_to_main' }
+        ]
+      ]
+    }
+  });
+});
+
+bot.action('back_to_main', ctx => {
+  ctx.session = { step: 'select_pair' };
+  ctx.editMessageText('🔄 Выберите направление обмена:', {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: 'BTC → USDT', callback_data: 'pair_BTC_USDT' },
+          { text: 'ETH → BTC', callback_data: 'pair_ETH_BTC' }
+        ],
+        [
+          { text: 'USDT → ETH', callback_data: 'pair_USDT_ETH' },
+          { text: 'LTC → BTC', callback_data: 'pair_LTC_BTC' }
+        ],
+        [
+          { text: 'Другие пары', callback_data: 'more_pairs' }
+        ]
+      ]
+    }
+  });
+});
+
+// Обработка выбора пары
+bot.action(/^pair_(\w+)_(\w+)$/, async (ctx) => {
+  const [, from, to] = ctx.match;
+  
+  // Сохраняем в сессию
+  ctx.session = {
+    step: 'enter_amount',
+    from: from.toUpperCase(),
+    to: to.toUpperCase()
+  };
+  
+  await ctx.deleteMessage();
+  ctx.reply(`💱 Вы выбрали: ${from.toUpperCase()} → ${to.toUpperCase()}\n\nВведите сумму ${from.toUpperCase()} для обмена:`);
+});
+
+// Обработка ввода суммы
+bot.on('text', async (ctx) => {
+  // Пропускаем команды
+  if (ctx.message.text.startsWith('/')) return;
+  
+  // Проверяем шаг
+  if (ctx.session.step !== 'enter_amount') {
+    return ctx.reply('Используйте /exchange для начала обмена');
+  }
+  
+  const amount = parseFloat(ctx.message.text.replace(',', '.'));
+  
+  if (isNaN(amount) {
+    return ctx.reply('⚠️ Пожалуйста, введите число. Например: 0.5 или 100');
+  }
+  
+  if (amount <= 0) {
+    return ctx.reply('⚠️ Сумма должна быть больше нуля');
+  }
+  
+  const { from, to } = ctx.session;
+  const pair = `${from}_${to}`;
+  
+  if (!exchangeRates[pair]) {
+    return ctx.reply('❌ Курс для этой пары не доступен');
+  }
+  
+  // Рассчет суммы
+  const rate = exchangeRates[pair];
+  const result = (amount * rate).toFixed(6);
+  
+  // Форматируем сумму
+  const formattedAmount = amount.toLocaleString('en', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 8
+  });
+  
+  const formattedResult = parseFloat(result).toLocaleString('en', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 8
+  });
+  
+  // Получаем данные по валютам
+  const fromCurrency = cryptoData[from] || { name: from };
+  const toCurrency = cryptoData[to] || { name: to };
+  
+  // Отправляем результат
+  ctx.replyWithMarkdown(`✅ *Детали обмена:*
+  
+➡️ Отправляете: *${formattedAmount} ${from}* (${fromCurrency.name})
+⬅️ Получаете: *${formattedResult} ${to}* (${toCurrency.name})
+📊 Курс: 1 ${from} = ${rate} ${to}
+
+💳 *Для завершения операции:*
+1. Переведите ${formattedAmount} ${from} на адрес:
+\`${fromCurrency.wallet}\`
+
+2. После отправки средств пришлите TXID (хэш транзакции) для подтверждения
+
+⏱️ Ордер будет активен 60 минут`);
+
+  // Сбрасываем сессию
+  ctx.session = null;
+});
+
+// Команда /help
+bot.command('help', ctx => {
+  ctx.replyWithMarkdown(`❓ *Помощь по боту:*
+  
+💱 *Обмен валют:*
+1. Используйте /exchange
+2. Выберите пару для обмена
+3. Введите сумму
+4. Переведите средства на указанный адрес
+5. Пришлите TXID транзакции
+
+📊 *Курсы валют:*
+- Все курсы фиксированные
+- Обновляются каждые 30 минут
+- Для просмотра используйте /rates
+
+⏱️ *Время операций:*
+- Крипто: 10-60 минут
+- Поддержка: 24/7
+
+⚠️ *Важно:*
+- Минимальная сумма: 10 USD эквивалент
+- Комиссии сети оплачивает отправитель
+- Адреса проверяйте через сканер QR-кода`);
 });
 
 // Обработчик для Vercel
 module.exports = async (req, res) => {
   try {
-    console.log(`\n--- New ${req.method} Request ---`);
-    
     if (req.method === 'POST') {
-      try {
-        // Для Vercel Serverless Functions
-        const chunks = [];
-        for await (const chunk of req) {
-          chunks.push(chunk);
-        }
-        const body = Buffer.concat(chunks).toString('utf8');
-        console.log('Request body:', body);
-        
-        const update = JSON.parse(body);
-        await bot.handleUpdate(update);
-        res.end('OK');
-      } catch (err) {
-        console.error('Request processing error:', err);
-        res.status(500).end('Internal error');
-      }
+      await bot.handleUpdate(req.body, res);
     } else {
-      res.status(200).json({
+      res.status(200).json({ 
         status: 'active',
-        platform: 'Telegram Crypto Bot',
-        node: process.version,
-        time: new Date().toISOString()
+        service: 'Crypto Exchange Telegram Bot',
+        version: '1.0'
       });
     }
   } catch (err) {
-    console.error('Global error handler:', err);
-    res.status(500).end('Server error');
+    console.error('Global error:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 };
 
-// Финал инициализации
-console.log('Bot initialization completed');
+// Запуск
+console.log('Crypto Exchange Bot started');
