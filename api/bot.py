@@ -1,39 +1,33 @@
 import os
+import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.filters import Command
 from aiogram.enums import ParseMode
-import logging
-import sys
+from aiogram.types import Message
 
 # Настройка логгирования
-logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Инициализация бота
+# Конфигурация
 API_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 bot = Bot(token=API_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
 
-class Form(StatesGroup):
-    main_menu = State()
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    await message.answer("✅ Бот успешно запущен!")
 
-@dp.message(commands=['start'])
-async def cmd_start(message: types.Message, state: FSMContext):
-    await message.answer(
-        "🖐 Добро пожаловать в бота!\n"
-        "Используйте /help для списка команд"
-    )
-    await state.set_state(Form.main_menu)
-
-@dp.message(commands=['help'])
-async def cmd_help(message: types.Message):
-    await message.answer("ℹ Доступные команды:\n/start\n/help")
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
+    await message.answer("ℹ Простой бот-шаблон")
 
 async def main():
+    await bot.delete_webhook()
     await dp.start_polling(bot)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
+    import asyncio
     asyncio.run(main())
