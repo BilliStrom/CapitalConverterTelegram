@@ -1,72 +1,85 @@
 const { Telegraf } = require('telegraf');
 
+// Фикс для вебхуков на Vercel
+process.env.NTBA_FIX_319 = "1";
+process.env.NTBA_FIX_350 = "1";
+
 const bot = new Telegraf(process.env.BOT_TOKEN, {
   telegram: {
-    webhookReply: false // ВАЖНО для Vercel!
+    webhookReply: false,
+    agent: null
   }
 });
 
-// Включаем сессии
-bot.use(Telegraf.session());
+// Логирование инициализации
+console.log('Bot initialization started');
+console.log('Environment:', process.env.VERCEL_ENV || 'development');
+console.log('Node version:', process.version);
 
-// Логгирование всех входящих запросов
-bot.use(async (ctx, next) => {
-  console.log('Received update:', JSON.stringify(ctx.update, null, 2));
-  await next();
+// Проверка токена
+if (!process.env.BOT_TOKEN) {
+  console.error('ERROR: BOT_TOKEN is not defined!');
+} else {
+  console.log('Bot token:', process.env.BOT_TOKEN.substring(0, 6) + '...');
+}
+
+// Простые команды для проверки
+bot.start(ctx => {
+  console.log('/start command received');
+  return ctx.reply('🚀 Бот успешно запущен! Используйте команды:\n/test - проверка работы\n/exchange - обмен валюты');
 });
 
-// Команды
-bot.start(ctx => ctx.reply('🪙 Бот активирован! Используйте /exchange'));
+bot.command('test', ctx => {
+  console.log('/test command received');
+  ctx.reply('✅ Тест успешен! Бот работает корректно.');
+});
 
 bot.command('exchange', ctx => {
-  ctx.reply('Выберите пару:', {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: 'BTC → USDC', callback_data: 'BTC_USDC' }]
-      ]
-    }
-  });
+  console.log('/exchange command received');
+  ctx.reply('🔁 Функция обмена в разработке...');
 });
 
-// Обработчик кнопок
-bot.action('BTC_USDC', ctx => {
-  ctx.editMessageText('Введите сумму BTC:');
-  ctx.session = { action: 'exchange', pair: 'BTC_USDC' };
+// Расширенное логгирование
+bot.use((ctx, next) => {
+  console.log('Update received:', JSON.stringify(ctx.update, null, 2));
+  return next();
 });
 
-// Обработчик текста
-bot.on('text', ctx => {
-  if (ctx.session?.action === 'exchange') {
-    const amount = parseFloat(ctx.message.text);
-    if (isNaN(amount)) {
-      return ctx.reply('Введите число!');
-    }
-    ctx.reply(`✅ Вы ввели: ${amount} BTC`);
-    ctx.session = null;
-  }
-});
-
-// Vercel handler (КРИТИЧЕСКИ ВАЖНО)
+// Обработчик для Vercel
 module.exports = async (req, res) => {
   try {
-    // Логируем входящий запрос
-    console.log('Incoming request:', req.method, req.url);
+    console.log(`\n--- New ${req.method} Request ---`);
     
     if (req.method === 'POST') {
-      console.log('Request body:', JSON.stringify(req.body, null, 2));
-      await bot.handleUpdate(req.body, res);
+      try {
+        // Для Vercel Serverless Functions
+        const chunks = [];
+        for await (const chunk of req) {
+          chunks.push(chunk);
+        }
+        const body = Buffer.concat(chunks).toString('utf8');
+        console.log('Request body:', body);
+        
+        const update = JSON.parse(body);
+        await bot.handleUpdate(update);
+        res.end('OK');
+      } catch (err) {
+        console.error('Request processing error:', err);
+        res.status(500).end('Internal error');
+      }
     } else {
-      // Для GET запросов
       res.status(200).json({
-        status: 'alive',
-        message: 'Bot is running'
+        status: 'active',
+        platform: 'Telegram Crypto Bot',
+        node: process.version,
+        time: new Date().toISOString()
       });
     }
   } catch (err) {
-    console.error('FATAL ERROR:', err);
-    res.status(500).json({ error: err.message });
+    console.error('Global error handler:', err);
+    res.status(500).end('Server error');
   }
 };
 
-// Проверка инициализации
-console.log('Bot initialized');
+// Финал инициализации
+console.log('Bot initialization completed');
