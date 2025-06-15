@@ -1,6 +1,6 @@
 const { Telegraf } = require('telegraf');
 const axios = require('axios');
-const LocalSession = require('telegraf-session-local'); // Добавляем локальные сессии
+const LocalSession = require('telegraf-session-local'); // Импортируем пакет
 
 // Фикс для вебхуков на Vercel
 process.env.NTBA_FIX_319 = "1";
@@ -14,8 +14,8 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 });
 
 // Инициализация сессий
-const session = new LocalSession({ database: 'session.json' });
-bot.use(session.middleware());
+const localSession = new LocalSession({ database: 'session_db.json' });
+bot.use(localSession.middleware());
 
 // Начальные данные
 const cryptoData = {
@@ -25,7 +25,7 @@ const cryptoData = {
   LTC: { name: "Litecoin", wallet: "LcWJv3djruGY4uh7xVPZyKxqJJUTdrzqN7" }
 };
 
-// Курсы обмена
+// Курсы обмена (можно заменить на API)
 const exchangeRates = {
   BTC_USDT: 63000,
   ETH_USDT: 3500,
@@ -70,7 +70,7 @@ bot.command('rates', async ctx => {
 
 // Команда /exchange
 bot.command('exchange', ctx => {
-  ctx.session.step = 'select_pair';
+  ctx.session.step = 'select_pair'; // Используем session из контекста
   ctx.reply('🔄 Выберите направление обмена:', {
     reply_markup: {
       inline_keyboard: [
