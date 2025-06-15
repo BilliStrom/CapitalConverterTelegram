@@ -151,13 +151,13 @@ bot.on('text', async (ctx) => {
   if (ctx.message.text.startsWith('/')) return;
   
   // Проверяем шаг
-  if (ctx.session.step !== 'enter_amount') {
+  if (!ctx.session || ctx.session.step !== 'enter_amount') {
     return ctx.reply('Используйте /exchange для начала обмена');
   }
   
   const amount = parseFloat(ctx.message.text.replace(',', '.'));
   
-  if (isNaN(amount) {
+  if (isNaN(amount)) {
     return ctx.reply('⚠️ Пожалуйста, введите число. Например: 0.5 или 100');
   }
   
