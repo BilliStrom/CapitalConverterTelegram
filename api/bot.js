@@ -1,5 +1,25 @@
 const { Telegraf, Markup } = require('telegraf');
-const NodeCache = require('node-cache');
+
+// Кастомная реализация кэша вместо node-cache
+const cache = {
+  _store: new Map(),
+  _timeouts: new Map(),
+  set(key, value, ttl = 3600) {
+    if (this._timeouts.has(key)) {
+      clearTimeout(this._timeouts.get(key));
+      this._timeouts.delete(key);
+    }
+    this._store.set(key, value);
+    const timeout = setTimeout(() => {
+      this._store.delete(key);
+      this._timeouts.delete(key);
+    }, ttl * 1000);
+    this._timeouts.set(key, timeout);
+  },
+  get(key) {
+    return this._store.get(key);
+  }
+};
 
 // Конфигурация
 const CONFIG = {
@@ -16,11 +36,9 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
   telegram: { webhookReply: false }
 });
 
-// Кэш для хранения данных
-const cache = new NodeCache({ stdTTL: 3600 });
 const userSessions = {};
 
-// Данные криптовалют (упрощенная версия без автоматических переводов)
+// Данные криптовалют
 const cryptoData = {
   BTC: { 
     name: "Bitcoin", 
@@ -52,7 +70,7 @@ const cryptoData = {
   }
 };
 
-// Курсы обмена (статичные)
+// Курсы обмена
 let exchangeRates = {
   BTC_USDT: 106368,
   ETH_USDT: 2575.78,
@@ -238,7 +256,7 @@ async function handleAmountInput(ctx) {
   ctx.session.step = 'confirm_txid';
 }
 
-// Обработка TXID (упрощенная, без реальной проверки)
+// Обработка TXID
 async function handleTxidInput(ctx) {
   const txid = ctx.message.text.trim();
   const { order } = ctx.session;
