@@ -23,7 +23,7 @@ const cache = {
 
 // Конфигурация
 const CONFIG = {
-  ADMIN_ID: @perepytali, // Замените на ваш Telegram ID
+  ADMIN_ID: 5948326124, // Замените на ваш Telegram ID
   MIN_AMOUNT_USD: 10,
   ORDER_EXPIRY_MINUTES: 60,
   RATES_UPDATE_INTERVAL: 30,
