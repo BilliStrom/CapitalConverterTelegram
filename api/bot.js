@@ -65,17 +65,17 @@ const initExchangeRates = async () => {
     // const response = await axios.get('https://api.binance.com/api/v3/ticker/price');
     exchangeRates = {
       BTC_USDT: 106368,
-      ETH_USDT: 2575,78,
-      LTC_USDT: 86,83,
-      BTC_ETH:  41,3,
-      ETH_BTC: 0,024213,
-      LTC_BTC: 0,000816,
-      BTC_LTC: 1 226,11,
-      ETH_LTC: 29,69,
-      BNB_USDT: 652,92,
-      XRP_USDT: 2,18,
-      BTC_BNB: 163,02,
-      ETH_BNB: 3,95,
+      ETH_USDT: 2575.78,
+      LTC_USDT: 86.83,
+      BTC_ETH:  41.3,
+      ETH_BTC: 0.024213,
+      LTC_BTC: 0.000816,
+      BTC_LTC: 1226.11,
+      ETH_LTC: 29.69,
+      BNB_USDT: 652.92,
+      XRP_USDT: 2.18,
+      BTC_BNB: 163.02,
+      ETH_BNB: 3.95,
     };
     lastRatesUpdate = Date.now();
     console.log('Курсы обновлены');
