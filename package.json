@@ -1,12 +1,17 @@
 {
-  "name": "crypto-telegram-bot",
+  "name": "crypto-exchange-bot",
   "version": "1.0.0",
   "scripts": {
     "start": "node api/bot.js"
   },
   "dependencies": {
     "axios": "^1.7.2",
-    "telegraf": "^4.12.2"
+    "bip39": "^3.1.0",
+    "ethereumjs-wallet": "^1.0.2",
+    "ethers": "^5.7.2",
+    "node-cache": "^5.1.2",
+    "telegraf": "^4.12.2",
+    "web3": "^1.10.0"
   },
   "engines": {
     "node": "22.x"
