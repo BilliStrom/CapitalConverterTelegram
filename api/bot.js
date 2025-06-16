@@ -50,12 +50,12 @@ bot.use((ctx, next) => {
 
 // Данные криптовалют
 const cryptoData = {
-  BTC: { name: "Bitcoin", wallet: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", min: 0.001 },
-  ETH: { name: "Ethereum", wallet: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e", min: 0.01 },
-  USDT: { name: "Tether", wallet: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", min: 10 },
-  LTC: { name: "Litecoin", wallet: "LcWJv3djruGY4uh7xVPZyKxqJJUTdrzqN7", min: 0.1 },
-  BNB: { name: "Binance Coin", wallet: "bnb1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", min: 0.1 },
-  XRP: { name: "Ripple", wallet: "rPwL3tnfwmW7CSh7UpqErVAj6LZbTZvSR3", min: 10 },
+  BTC: { name: "Bitcoin", wallet: "bc1qre7z0r3jpkaqtcr3wv5lvvy78u578xkmap9r7l", min: 0.001 },
+  ETH: { name: "Ethereum", wallet: "0xCcd1e4947C45B1c22c46d59F16D34be4441377B8", min: 0.01 },
+  USDT: { name: "Tether", wallet: "0xCcd1e4947C45B1c22c46d59F16D34be4441377B8", min: 10 },
+  LTC: { name: "Litecoin", wallet: "ltc1qjhaut8kw9e450s6k9fa82seqykg4xcu0zfqxc8", min: 0.1 },
+  BNB: { name: "Binance Coin", wallet: "0xCcd1e4947C45B1c22c46d59F16D34be4441377B8", min: 0.1 },
+  XRP: { name: "Ripple", wallet: "rM73La2rNE3SP6WbTvAuxGUmUsGN4YjJET", min: 10 },
 };
 
 // Инициализация курсов
@@ -64,18 +64,18 @@ const initExchangeRates = async () => {
     // Здесь можно добавить реальное API, например:
     // const response = await axios.get('https://api.binance.com/api/v3/ticker/price');
     exchangeRates = {
-      BTC_USDT: 63000,
-      ETH_USDT: 3500,
-      LTC_USDT: 75,
-      BTC_ETH: 18.0,
-      ETH_BTC: 0.055,
-      LTC_BTC: 0.0012,
-      BTC_LTC: 840,
-      ETH_LTC: 46.67,
-      BNB_USDT: 600,
-      XRP_USDT: 0.5,
-      BTC_BNB: 105,
-      ETH_BNB: 5.83,
+      BTC_USDT: 106368,
+      ETH_USDT: 2575,78,
+      LTC_USDT: 86,83,
+      BTC_ETH:  41,3,
+      ETH_BTC: 0,024213,
+      LTC_BTC: 0,000816,
+      BTC_LTC: 1 226,11,
+      ETH_LTC: 29,69,
+      BNB_USDT: 652,92,
+      XRP_USDT: 2,18,
+      BTC_BNB: 163,02,
+      ETH_BNB: 3,95,
     };
     lastRatesUpdate = Date.now();
     console.log('Курсы обновлены');
