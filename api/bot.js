@@ -1,6 +1,6 @@
 const { Telegraf, Markup } = require('telegraf');
 
-// Кастомная реализация кэша вместо node-cache
+// Кастомная реализация кэша
 const cache = {
   _store: new Map(),
   _timeouts: new Map(),
@@ -18,17 +18,23 @@ const cache = {
   },
   get(key) {
     return this._store.get(key);
+  },
+  del(key) {
+    if (this._timeouts.has(key)) {
+      clearTimeout(this._timeouts.get(key));
+      this._timeouts.delete(key);
+    }
+    this._store.delete(key);
   }
 };
 
 // Конфигурация
 const CONFIG = {
-  ADMIN_ID: 5948326124, // Замените на ваш Telegram ID
-  MIN_AMOUNT_USD: 10,
-  ORDER_EXPIRY_MINUTES: 60,
-  RATES_UPDATE_INTERVAL: 30,
+  ADMIN_ID: 5948326124,
+  FREE_SEARCH_LIMIT: 3,
+  PREMIUM_COST: 100, // рублей
   SESSION_TIMEOUT: 600000,
-  COMMISSION_PERCENT: 1,
+  CHAT_TIMEOUT: 3600000, // 1 час бездействия
 };
 
 // Инициализация бота
@@ -36,53 +42,19 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
   telegram: { webhookReply: false }
 });
 
+// Хранилище данных
+const userData = new Map();
+const activeChats = new Map();
+const searchQueue = {
+  male: [],
+  female: [],
+  any: []
+};
+
+// Сессии пользователей
 const userSessions = {};
 
-// Данные криптовалют
-const cryptoData = {
-  BTC: { 
-    name: "Bitcoin", 
-    wallet: "bc1qre7z0r3jpkaqtcr3wv5lvvy78u578xkmap9r7l", 
-    min: 0.001,
-    decimals: 8,
-    explorer: txid => `https://blockchair.com/bitcoin/transaction/${txid}`
-  },
-  ETH: { 
-    name: "Ethereum", 
-    wallet: "0xCcd1e4947C45B1c22c46d59F16D34be4441377B8", 
-    min: 0.01,
-    decimals: 18,
-    explorer: txid => `https://etherscan.io/tx/${txid}`
-  },
-  USDT: { 
-    name: "Tether", 
-    wallet: "0xCcd1e4947C45B1c22c46d59F16D34be4441377B8", 
-    min: 10,
-    decimals: 6,
-    explorer: txid => `https://etherscan.io/tx/${txid}`
-  },
-  LTC: { 
-    name: "Litecoin", 
-    wallet: "ltc1qjhaut8kw9e450s6k9fa82seqykg4xcu0zfqxc8", 
-    min: 0.1,
-    decimals: 8,
-    explorer: txid => `https://blockchair.com/litecoin/transaction/${txid}`
-  }
-};
-
-// Курсы обмена
-let exchangeRates = {
-  BTC_USDT: 106368,
-  ETH_USDT: 2575.78,
-  LTC_USDT: 86.83,
-  BTC_ETH: 41.3,
-  ETH_BTC: 0.024213,
-  LTC_BTC: 0.000816,
-  BTC_LTC: 1226.11,
-  ETH_LTC: 29.69
-};
-
-// Инициализация сессий
+// Middleware для сессий
 bot.use((ctx, next) => {
   const userId = ctx.from?.id;
   if (!userId) return next();
@@ -105,65 +77,56 @@ bot.use((ctx, next) => {
 
 // Команда /start
 bot.command('start', (ctx) => {
-  const welcomeMessage = `🚀 Добро пожаловать в *Crypto Exchange Bot*!
+  const welcomeMessage = `👋 Добро пожаловать в *Анонимный Чат*!
   
-📊 *Текущие курсы:*
-1 BTC = ${exchangeRates.BTC_USDT} USDT
-1 ETH = ${exchangeRates.ETH_USDT} USDT
-1 LTC = ${exchangeRates.LTC_USDT} USDT
+✨ *Возможности:*
+🔍 Поиск собеседников
+🚻 Фильтр по полу
+💎 Премиум-подписка
+🎯 Таргетированный поиск
 
-💱 Чтобы начать обмен, используйте /exchange
-📝 Чтобы зарегистрировать кошелек: /register
-🆘 Помощь: /help`;
+📋 *Основные команды:*
+/start - Начать работу
+/profile - Настройка профиля
+/search - Найти собеседника
+/stop - Остановить диалог
+/premium - Премиум-подписка
+/help - Помощь
+
+💬 Начните с настройки профиля командой /profile`;
 
   ctx.replyWithMarkdown(welcomeMessage);
 });
 
-// Регистрация кошелька
-bot.command('register', (ctx) => {
-  ctx.session.step = 'register_wallet';
-  ctx.reply('📝 Введите адрес вашего криптокошелька для получения средств:');
-});
-
-// Просмотр кошелька
-bot.command('wallet', (ctx) => {
-  const address = ctx.session.walletAddress || cache.get(`user_${ctx.from.id}`);
-  if (address) {
-    ctx.replyWithMarkdown(`💼 Ваш кошелек:\n\`${address}\``);
-  } else {
-    ctx.reply('ℹ️ У вас нет зарегистрированного кошелька. Используйте /register');
-  }
-});
-
-// Обмен валюты
-bot.command('exchange', (ctx) => {
-  if (!ctx.session.walletAddress && !cache.get(`user_${ctx.from.id}`)) {
-    return ctx.reply('⚠️ Сначала зарегистрируйте кошелек командой /register');
-  }
-  ctx.session.step = 'select_pair';
-  showExchangeMenu(ctx);
-});
-
-// Меню обмена
-function showExchangeMenu(ctx) {
-  ctx.reply('🔄 Выберите направление обмена:', Markup.inlineKeyboard([
-    [
-      Markup.button.callback('BTC → USDT', 'pair_BTC_USDT'),
-      Markup.button.callback('ETH → BTC', 'pair_ETH_BTC'),
-    ],
-    [
-      Markup.button.callback('USDT → ETH', 'pair_USDT_ETH'),
-      Markup.button.callback('LTC → BTC', 'pair_LTC_BTC'),
-    ]
+// Настройка профиля
+bot.command('profile', (ctx) => {
+  ctx.session.step = 'set_gender';
+  ctx.reply('🚻 Выберите ваш пол:', Markup.inlineKeyboard([
+    [Markup.button.callback('👨 Мужской', 'gender_male')],
+    [Markup.button.callback('👩 Женский', 'gender_female')]
   ]));
-}
+});
 
-// Обработка выбора пары
-bot.action(/^pair_(\w+)_(\w+)$/, async (ctx) => {
-  const [, from, to] = ctx.match;
-  ctx.session.step = 'enter_amount';
-  ctx.session.from = from.toUpperCase();
-  ctx.session.to = to.toUpperCase();
+// Обработка выбора пола
+bot.action(/^gender_(male|female)$/, async (ctx) => {
+  const gender = ctx.match[1];
+  const userId = ctx.from.id;
+  
+  // Сохраняем данные пользователя
+  if (!userData.has(userId)) {
+    userData.set(userId, {
+      gender,
+      premium: false,
+      searchesLeft: CONFIG.FREE_SEARCH_LIMIT,
+      createdAt: Date.now()
+    });
+  } else {
+    const data = userData.get(userId);
+    data.gender = gender;
+    userData.set(userId, data);
+  }
+  
+  cache.set(`user_${userId}`, gender);
   
   try {
     await ctx.deleteMessage();
@@ -171,138 +134,248 @@ bot.action(/^pair_(\w+)_(\w+)$/, async (ctx) => {
     console.log('Не удалось удалить сообщение:', e.message);
   }
   
-  const minAmount = cryptoData[ctx.session.from]?.min || 0;
-  ctx.reply(`💱 Вы выбрали: ${ctx.session.from} → ${ctx.session.to}\n\nВведите сумму ${ctx.session.from} для обмена${minAmount ? `\n(Минимум: ${minAmount} ${ctx.session.from})` : ''}:`);
+  ctx.replyWithMarkdown(`✅ Пол установлен: ${gender === 'male' ? '👨 Мужской' : '👩 Женский'}\n\nТеперь вы можете использовать /search для поиска собеседника`);
 });
 
-// Обработка ввода
+// Поиск собеседника
+bot.command('search', (ctx) => {
+  const userId = ctx.from.id;
+  const user = userData.get(userId);
+  
+  if (!user || !user.gender) {
+    return ctx.reply('⚠️ Сначала настройте профиль командой /profile');
+  }
+  
+  if (user.searchesLeft <= 0 && !user.premium) {
+    return ctx.replyWithMarkdown(`❌ Лимит бесплатных поисков исчерпан\n\n💎 Приобретите премиум-подписку для неограниченного поиска:\n/premium`);
+  }
+  
+  ctx.session.step = 'search_options';
+  ctx.reply('🔍 Выберите тип поиска:', Markup.inlineKeyboard([
+    [Markup.button.callback('🎯 По полу', 'search_by_gender')],
+    [Markup.button.callback('🎲 Случайный', 'search_random')],
+    [Markup.button.callback('❌ Отмена', 'search_cancel')]
+  ]));
+});
+
+// Поиск по полу (премиум)
+bot.action('search_by_gender', async (ctx) => {
+  const userId = ctx.from.id;
+  const user = userData.get(userId);
+  
+  if (!user.premium) {
+    try {
+      await ctx.deleteMessage();
+    } catch (e) {
+      console.log('Не удалось удалить сообщение:', e.message);
+    }
+    return ctx.replyWithMarkdown(`❌ Поиск по полу доступен только с премиум-подпиской\n\n💎 Приобретите премиум:\n/premium`);
+  }
+  
+  ctx.session.step = 'select_gender';
+  ctx.reply('🚻 Выберите пол для поиска:', Markup.inlineKeyboard([
+    [Markup.button.callback('👨 Мужской', 'find_male')],
+    [Markup.button.callback('👩 Женский', 'find_female')],
+    [Markup.button.callback('❌ Отмена', 'search_cancel')]
+  ]));
+});
+
+// Случайный поиск
+bot.action('search_random', async (ctx) => {
+  const userId = ctx.from.id;
+  const user = userData.get(userId);
+  
+  // Уменьшаем счетчик поисков для бесплатных пользователей
+  if (!user.premium) {
+    user.searchesLeft--;
+    userData.set(userId, user);
+  }
+  
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {
+    console.log('Не удалось удалить сообщение:', e.message);
+  }
+  
+  ctx.reply('🔍 Ищем собеседника...');
+  findChatPartner(userId, 'any');
+});
+
+// Поиск конкретного пола
+bot.action(/^find_(male|female)$/, async (ctx) => {
+  const gender = ctx.match[1];
+  const userId = ctx.from.id;
+  
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {
+    console.log('Не удалось удалить сообщение:', e.message);
+  }
+  
+  ctx.reply(`🔍 Ищем ${gender === 'male' ? '👨 мужчину' : '👩 женщину'}...`);
+  findChatPartner(userId, gender);
+});
+
+// Отмена поиска
+bot.action('search_cancel', async (ctx) => {
+  try {
+    await ctx.deleteMessage();
+  } catch (e) {
+    console.log('Не удалось удалить сообщение:', e.message);
+  }
+  ctx.reply('❌ Поиск отменен');
+});
+
+// Поиск собеседника
+function findChatPartner(userId, targetGender) {
+  const user = userData.get(userId);
+  const queue = searchQueue[targetGender];
+  
+  // Если пользователь уже в очереди
+  if (queue.includes(userId)) {
+    return;
+  }
+  
+  // Добавляем в очередь
+  queue.push(userId);
+  
+  // Ищем подходящего собеседника
+  if (queue.length >= 2) {
+    const partnerId = queue.find(id => id !== userId);
+    if (partnerId) {
+      // Удаляем из очереди
+      const index = queue.indexOf(partnerId);
+      if (index > -1) queue.splice(index, 1);
+      const userIndex = queue.indexOf(userId);
+      if (userIndex > -1) queue.splice(userIndex, 1);
+      
+      // Создаем чат
+      createChat(userId, partnerId);
+    }
+  }
+}
+
+// Создание чата
+function createChat(user1Id, user2Id) {
+  const chatId = `${user1Id}_${user2Id}_${Date.now()}`;
+  
+  activeChats.set(user1Id, { partner: user2Id, chatId });
+  activeChats.set(user2Id, { partner: user1Id, chatId });
+  
+  // Таймаут чата
+  const timeout = setTimeout(() => {
+    endChat(chatId);
+  }, CONFIG.CHAT_TIMEOUT);
+  
+  cache.set(`chat_${chatId}`, timeout);
+  
+  // Уведомляем пользователей
+  const user1Gender = userData.get(user1Id)?.gender || 'unknown';
+  const user2Gender = userData.get(user2Id)?.gender || 'unknown';
+  
+  bot.telegram.sendMessage(user1Id, `💬 Собеседник найден! (${user2Gender === 'male' ? '👨' : '👩'})\n\n✉️ Напишите сообщение...\n/stop - завершить диалог`);
+  bot.telegram.sendMessage(user2Id, `💬 Собеседник найден! (${user1Gender === 'male' ? '👨' : '👩'})\n\n✉️ Напишите сообщение...\n/stop - завершить диалог`);
+}
+
+// Завершение чата
+function endChat(chatId) {
+  const [user1Id, user2Id] = chatId.split('_');
+  
+  activeChats.delete(parseInt(user1Id));
+  activeChats.delete(parseInt(user2Id));
+  cache.del(`chat_${chatId}`);
+  
+  bot.telegram.sendMessage(user1Id, '❌ Диалог завершен (таймаут)');
+  bot.telegram.sendMessage(user2Id, '❌ Диалог завершен (таймаут)');
+}
+
+// Обработка сообщений
 bot.on('text', async (ctx) => {
-  const text = ctx.message.text.trim();
+  const userId = ctx.from.id;
+  const text = ctx.message.text;
   
   if (text.startsWith('/')) return;
   
-  // Регистрация кошелька
-  if (ctx.session.step === 'register_wallet') {
-    cache.set(`user_${ctx.from.id}`, text);
-    ctx.session.walletAddress = text;
-    return ctx.replyWithMarkdown(`✅ Кошелек зарегистрирован:\n\`${text}\`\n\nТеперь вы можете использовать /exchange`);
+  // Если пользователь в активном чате
+  const chat = activeChats.get(userId);
+  if (chat) {
+    const partnerId = chat.partner;
+    
+    try {
+      await ctx.telegram.sendMessage(partnerId, `✉️ Сообщение:\n\n${text}\n\n/stop - завершить диалог`);
+      ctx.reply('✅ Сообщение отправлено');
+    } catch (error) {
+      ctx.reply('❌ Не удалось отправить сообщение');
+      endChat(chat.chatId);
+    }
+    return;
   }
   
-  // Ввод суммы
-  if (ctx.session.step === 'enter_amount') {
-    return handleAmountInput(ctx);
+  // Обработка шагов регистрации
+  if (ctx.session.step === 'set_gender') {
+    // Уже обрабатывается через кнопки
+    return;
   }
   
-  // Ввод TXID
-  if (ctx.session.step === 'confirm_txid') {
-    return handleTxidInput(ctx);
-  }
-  
-  ctx.reply('ℹ️ Для начала обмена используйте /exchange');
+  ctx.reply('ℹ️ Используйте /search для поиска собеседника');
 });
 
-// Обработка суммы
-async function handleAmountInput(ctx) {
-  const amount = parseFloat(ctx.message.text.replace(',', '.'));
+// Команда /stop
+bot.command('stop', (ctx) => {
+  const userId = ctx.from.id;
+  const chat = activeChats.get(userId);
   
-  if (isNaN(amount)) {
-    return ctx.reply('⚠️ Пожалуйста, введите число. Например: 0.5 или 100');
+  if (chat) {
+    endChat(chat.chatId);
+    ctx.reply('✅ Диалог завершен');
+  } else {
+    ctx.reply('ℹ️ У вас нет активных диалогов');
+  }
+});
+
+// Премиум-подписка
+bot.command('premium', (ctx) => {
+  const userId = ctx.from.id;
+  const user = userData.get(userId);
+  
+  if (user && user.premium) {
+    return ctx.replyWithMarkdown('💎 У вас уже есть премиум-подписка!\n\n✨ Преимущества:\n• 🚻 Поиск по полу\n• ♾️ Неограниченный поиск\n• ⚡ Приоритет в очереди');
   }
   
-  const { from, to } = ctx.session;
-  const minAmount = cryptoData[from]?.min || 0;
-  
-  if (amount < minAmount) {
-    return ctx.reply(`⚠️ Минимальная сумма: ${minAmount} ${from}`);
-  }
-  
-  const pair = `${from}_${to}`;
-  if (!exchangeRates[pair]) {
-    return ctx.reply('❌ Курс для этой пары не доступен');
-  }
-  
-  const commission = amount * (CONFIG.COMMISSION_PERCENT / 100);
-  const netAmount = amount - commission;
-  const rate = exchangeRates[pair];
-  const result = (netAmount * rate).toFixed(8);
-  
-  ctx.session.order = {
-    amount,
-    netAmount,
-    commission,
-    from,
-    to,
-    rate,
-    result,
-    timestamp: Date.now()
-  };
-  
-  const fromCurrency = cryptoData[from];
-  
-  ctx.replyWithMarkdown(`✅ *Детали обмена:*
-  
-➡️ Отправляете: *${formatCrypto(amount, from)} ${from}*
-➖ Комиссия (${CONFIG.COMMISSION_PERCENT}%): *${formatCrypto(commission, from)} ${from}*
-🔄 К обмену: *${formatCrypto(netAmount, from)} ${from}*
-⬅️ Получаете: *${formatCrypto(result, to)} ${to}*
-📊 Курс: 1 ${from} = ${rate} ${to}
+  ctx.replyWithMarkdown(`💎 *Премиум-подписка* - ${CONFIG.PREMIUM_COST} руб.
 
-💳 *Для завершения:*
-1. Переведите ${formatCrypto(amount, from)} ${from} на:
-\`${fromCurrency.wallet}\`
+✨ *Преимущества:*
+• 🚻 Поиск по полу (мужской/женский)
+• ♾️ Неограниченное количество поисков
+• ⚡ Приоритет в очереди поиска
 
-2. Отправьте TXID транзакции`);
+💳 Для приобретения свяжитесь с администратором: @admin`);
+});
 
-  ctx.session.step = 'confirm_txid';
-}
+// Помощь
+bot.command('help', (ctx) => {
+  ctx.replyWithMarkdown(`❓ *Помощь по боту*
 
-// Обработка TXID
-async function handleTxidInput(ctx) {
-  const txid = ctx.message.text.trim();
-  const { order } = ctx.session;
-  
-  if (!order) {
-    return ctx.reply('❌ Ордер не найден. Начните заново /exchange');
-  }
-  
-  if (txid.length < 10) {
-    return ctx.reply('⚠️ Неверный формат TXID. Введите корректный хэш транзакции:');
-  }
-  
-  const address = ctx.session.walletAddress || cache.get(`user_${ctx.from.id}`);
-  
-  ctx.replyWithMarkdown(`📬 *Запрос на обмен принят!*
-  
-TXID: \`${txid}\`
-Сумма: ${formatCrypto(order.amount, order.from)} ${order.from}
-К получению: ${formatCrypto(order.result, order.to)} ${order.to}
-Адрес: \`${address}\`
+🔍 *Поиск собеседника:*
+• Бесплатно: ${CONFIG.FREE_SEARCH_LIMIT} поиска в день
+• Премиум: неограниченно + поиск по полу
 
-✅ Ваша заявка принята в обработку. Средства будут зачислены в течение 1-24 часов.
+💎 *Премиум-подписка:*
+• Стоимость: ${CONFIG.PREMIUM_COST} руб.
+• Команда: /premium
 
-🔗 Проверить транзакцию: [Block Explorer](${cryptoData[order.from]?.explorer(txid) || '#'})`);
+📋 *Основные команды:*
+/start - Начать
+/profile - Настройка профиля
+/search - Поиск собеседника
+/stop - Завершить диалог
+/premium - Премиум-подписка
 
-  clearUserSession(ctx);
-}
-
-// Вспомогательные функции
-function formatCrypto(value, currency) {
-  const num = parseFloat(value);
-  const decimals = cryptoData[currency]?.decimals || 8;
-  return num.toLocaleString('en', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: decimals
-  });
-}
-
-function clearUserSession(ctx) {
-  const userId = ctx.from?.id;
-  if (userId && userSessions[userId]) {
-    clearTimeout(userSessions[userId].timer);
-    delete userSessions[userId];
-  }
-  ctx.session = {};
-}
+⚠️ *Правила:*
+• Уважайте собеседников
+• Запрещен спам
+• Запрещены оскорбления`);
+});
 
 // Обработчик для Vercel
 module.exports = async (req, res) => {
@@ -312,8 +385,10 @@ module.exports = async (req, res) => {
     } else {
       res.status(200).json({ 
         status: 'active',
-        service: 'Crypto Exchange Bot',
-        version: '3.1'
+        service: 'Anonymous Chat Bot',
+        version: '1.0',
+        users: userData.size,
+        activeChats: activeChats.size
       });
     }
   } catch (err) {
@@ -322,4 +397,4 @@ module.exports = async (req, res) => {
   }
 };
 
-console.log('Bot started');
+console.log('Anonymous Chat Bot started');
