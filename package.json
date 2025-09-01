@@ -1,7 +1,7 @@
 {
-  "name": "crypto-exchange-bot",
+  "name": "anonymous-chat-bot",
   "version": "1.0.0",
-  "description": "Telegram Crypto Exchange Bot with built-in cache solution",
+  "description": "Telegram Anonymous Chat Bot with gender-based matching and premium subscriptions",
   "main": "api/bot.js",
   "scripts": {
     "start": "node api/bot.js",
@@ -13,11 +13,7 @@
   },
   "dependencies": {
     "telegraf": "^4.12.2",
-    "axios": "^1.7.2",
-    "bip39": "^3.1.0",
-    "ethereumjs-wallet": "^1.0.2",
-    "ethers": "^5.7.2",
-    "web3": "^1.10.0"
+    "axios": "^1.7.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
@@ -25,13 +21,14 @@
   "keywords": [
     "telegram",
     "bot",
-    "crypto",
-    "exchange"
+    "anonymous",
+    "chat",
+    "dating"
   ],
   "author": "Your Name",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/crypto-exchange-bot.git"
+    "url": "https://github.com/yourusername/anonymous-chat-bot.git"
   }
 }
