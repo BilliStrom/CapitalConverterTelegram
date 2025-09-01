@@ -11,7 +11,7 @@ try {
   console.log('Redis connected successfully');
 } catch (error) {
   console.error('Redis connection error:', error);
-  // Заглушка для Redis в случае ошибки подключения
+  // Заглушка для Redis
   redis = {
     get: () => Promise.resolve(null),
     set: () => Promise.resolve(),
@@ -43,7 +43,6 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 
 // Состояния бота
 const USER_STATE = {
-  START: 'start',
   AGE_VERIFICATION: 'age_verification',
   TERMS_ACCEPTANCE: 'terms_acceptance',
   PROFILE_SETUP: 'profile_setup',
@@ -77,7 +76,6 @@ const redisHelpers = {
   addToQueue: async (userId, gender) => {
     try {
       await redis.sadd(`queue:${gender}`, userId.toString());
-      await redis.set(`search_time:${userId}`, Date.now().toString());
       return true;
     } catch (error) {
       console.error('Error adding to queue:', error);
@@ -88,19 +86,9 @@ const redisHelpers = {
   removeFromQueue: async (userId, gender) => {
     try {
       await redis.srem(`queue:${gender}`, userId.toString());
-      await redis.del(`search_time:${userId}`);
       return true;
     } catch (error) {
       console.error('Error removing from queue:', error);
-      return false;
-    }
-  },
-  
-  isInQueue: async (userId, gender) => {
-    try {
-      return await redis.sismember(`queue:${gender}`, userId.toString());
-    } catch (error) {
-      console.error('Error checking queue:', error);
       return false;
     }
   },
@@ -218,9 +206,9 @@ bot.command('start', async (ctx) => {
       user.state = USER_STATE.AGE_VERIFICATION;
       await redisHelpers.setUser(userId, user);
       
-      return ctx.replyWithMarkdown(
-        `👋 Добро пожаловать в *Анонимный Чат*!\n\n` +
-        `Для использования сервиса вам должно быть *не менее 18 лет*.\n\n` +
+      return ctx.reply(
+        `👋 Добро пожаловать в Анонимный Чат!\n\n` +
+        `Для использования сервиса вам должно быть не менее 18 лет.\n\n` +
         `Подтверждаете, что вам есть 18 лет?`,
         Markup.inlineKeyboard([
           [Markup.button.callback('✅ Да, мне есть 18 лет', 'age_confirm_yes')],
@@ -233,8 +221,8 @@ bot.command('start', async (ctx) => {
       user.state = USER_STATE.TERMS_ACCEPTANCE;
       await redisHelpers.setUser(userId, user);
       
-      return ctx.replyWithMarkdown(
-        `📋 Для продолжения необходимо принять наши правила:\n\n` +
+      return ctx.reply(
+        `📋 Для продолжения необходимо принять наши правила.\n\n` +
         `Соглашаетесь с условиями?`,
         Markup.inlineKeyboard([
           [Markup.button.callback('✅ Принимаю', 'terms_accept')],
@@ -259,12 +247,12 @@ bot.command('start', async (ctx) => {
     user.state = USER_STATE.MAIN_MENU;
     await redisHelpers.setUser(userId, user);
     
-    const welcomeMessage = `✨ Добро пожаловать в *Анонимный Чат*!\n\n` +
+    const welcomeMessage = `✨ Добро пожаловать в Анонимный Чат!\n\n` +
       `🔍 Бесплатных поисков: ${user.searchesLeft}\n` +
       `💎 Статус: ${user.premium ? 'Премиум' : 'Обычный'}\n\n` +
       `Выберите действие:`;
     
-    ctx.replyWithMarkdown(welcomeMessage, getMainMenu());
+    ctx.reply(welcomeMessage, getMainMenu());
   } catch (error) {
     console.error('Error in start command:', error);
     ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
@@ -274,6 +262,7 @@ bot.command('start', async (ctx) => {
 // Обработка подтверждения возраста
 bot.action('age_confirm_yes', async (ctx) => {
   try {
+    // Отвечаем на callback запрос
     await ctx.answerCbQuery();
     
     const userId = ctx.from.id;
@@ -284,14 +273,9 @@ bot.action('age_confirm_yes', async (ctx) => {
       user.state = USER_STATE.TERMS_ACCEPTANCE;
       await redisHelpers.setUser(userId, user);
       
-      try {
-        await ctx.deleteMessage();
-      } catch (e) {
-        console.log('Не удалось удалить сообщение:', e.message);
-      }
-      
-      await ctx.replyWithMarkdown(
-        `📋 Для продолжения необходимо принять наши правила:\n\n` +
+      // Отправляем новое сообщение вместо редактирования
+      await ctx.reply(
+        `📋 Для продолжения необходимо принять наши правила.\n\n` +
         `Соглашаетесь с условиями?`,
         Markup.inlineKeyboard([
           [Markup.button.callback('✅ Принимаю', 'terms_accept')],
@@ -301,20 +285,13 @@ bot.action('age_confirm_yes', async (ctx) => {
     }
   } catch (error) {
     console.error('Error in age confirmation:', error);
-    ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
+    await ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
   }
 });
 
 bot.action('age_confirm_no', async (ctx) => {
   try {
     await ctx.answerCbQuery();
-    
-    try {
-      await ctx.deleteMessage();
-    } catch (e) {
-      console.log('Не удалось удалить сообщение:', e.message);
-    }
-    
     await ctx.reply('❌ Извините, этот сервис предназначен только для совершеннолетних пользователей.');
   } catch (error) {
     console.error('Error in age rejection:', error);
@@ -334,12 +311,6 @@ bot.action('terms_accept', async (ctx) => {
       user.state = USER_STATE.PROFILE_SETUP;
       await redisHelpers.setUser(userId, user);
       
-      try {
-        await ctx.deleteMessage();
-      } catch (e) {
-        console.log('Не удалось удалить сообщение:', e.message);
-      }
-      
       await ctx.reply(
         '🚻 Для начала выберите ваш пол:',
         Markup.inlineKeyboard([
@@ -350,20 +321,13 @@ bot.action('terms_accept', async (ctx) => {
     }
   } catch (error) {
     console.error('Error in terms acceptance:', error);
-    ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
+    await ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
   }
 });
 
 bot.action('terms_decline', async (ctx) => {
   try {
     await ctx.answerCbQuery();
-    
-    try {
-      await ctx.deleteMessage();
-    } catch (e) {
-      console.log('Не удалось удалить сообщение:', e.message);
-    }
-    
     await ctx.reply('❌ Для использования сервиса необходимо принять правила. Если передумаете - запустите бота снова командой /start');
   } catch (error) {
     console.error('Error in terms rejection:', error);
@@ -384,22 +348,16 @@ bot.action(/^gender_(male|female)$/, async (ctx) => {
       user.state = USER_STATE.MAIN_MENU;
       await redisHelpers.setUser(userId, user);
       
-      try {
-        await ctx.deleteMessage();
-      } catch (e) {
-        console.log('Не удалось удалить сообщение:', e.message);
-      }
-      
-      const welcomeMessage = `✨ Добро пожаловать в *Анонимный Чат*!\n\n` +
+      const welcomeMessage = `✨ Добро пожаловать в Анонимный Чат!\n\n` +
         `🔍 Бесплатных поисков: ${user.searchesLeft}\n` +
         `💎 Статус: ${user.premium ? 'Премиум' : 'Обычный'}\n\n` +
         `Выберите действие:`;
       
-      await ctx.replyWithMarkdown(welcomeMessage, getMainMenu());
+      await ctx.reply(welcomeMessage, getMainMenu());
     }
   } catch (error) {
     console.error('Error in gender selection:', error);
-    ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
+    await ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
   }
 });
 
@@ -414,6 +372,7 @@ bot.on('text', async (ctx) => {
       return ctx.reply('Пожалуйста, начните с команды /start');
     }
     
+    // Если пользователь в чате
     if (user.state === USER_STATE.IN_CHAT) {
       const chat = await redisHelpers.getActiveChat(userId);
       if (chat && chat.partnerId) {
@@ -428,6 +387,7 @@ bot.on('text', async (ctx) => {
       return;
     }
     
+    // Обработка главного меню
     switch (text) {
       case '🔍 Найти собеседника':
         await handleSearch(ctx);
@@ -439,10 +399,10 @@ bot.on('text', async (ctx) => {
         await showPremiumInfo(ctx);
         break;
       case '📞 Поддержка':
-        ctx.replyWithMarkdown(`🆘 *Поддержка*\n\nПо всем вопросам обращайтесь: ${CONFIG.SUPPORT_URL}`);
+        ctx.reply(`🆘 Поддержка\n\nПо всем вопросам обращайтесь: ${CONFIG.SUPPORT_URL}`);
         break;
       case '📜 Правила':
-        ctx.replyWithMarkdown('📜 *Правила использования:*\n\n1. Быть вежливым\n2. Не спамить\n3. Уважать собеседников');
+        ctx.reply('📜 Правила использования:\n\n1. Быть вежливым\n2. Не спамить\n3. Уважать собеседников');
         break;
       case '❌ Выход':
         ctx.reply('До свидания! Если захотите вернуться, используйте /start');
@@ -467,7 +427,7 @@ async function handleSearch(ctx) {
     }
     
     if (user.searchesLeft <= 0 && !user.premium) {
-      return ctx.replyWithMarkdown(
+      return ctx.reply(
         `❌ Лимит бесплатных поисков исчерпан\n\n` +
         `💎 Приобретите премиум-подписку для неограниченного поиска`,
         Markup.inlineKeyboard([
@@ -477,6 +437,7 @@ async function handleSearch(ctx) {
       );
     }
     
+    // Уменьшаем счетчик поисков для бесплатных пользователей
     if (!user.premium) {
       user.searchesLeft--;
       await redisHelpers.setUser(userId, user);
@@ -485,6 +446,7 @@ async function handleSearch(ctx) {
     user.state = USER_STATE.SEARCHING;
     await redisHelpers.setUser(userId, user);
     
+    // Показываем варианты поиска
     if (user.premium) {
       ctx.reply(
         '🔍 Выберите тип поиска:',
@@ -519,14 +481,14 @@ async function showProfile(ctx) {
       return ctx.reply('Пожалуйста, начните с команды /start');
     }
     
-    const profileText = `👤 *Ваш профиль*\n\n` +
+    const profileText = `👤 Ваш профиль\n\n` +
       `Имя: ${user.first_name}${user.last_name ? ' ' + user.last_name : ''}\n` +
       `Пол: ${user.gender === 'male' ? '👨 Мужской' : '👩 Женский'}\n` +
       `Статус: ${user.premium ? '💎 Премиум' : '🔓 Обычный'}\n` +
       `Поисков осталось: ${user.searchesLeft}\n` +
       `Дата регистрации: ${new Date(user.createdAt).toLocaleDateString('ru-RU')}`;
     
-    ctx.replyWithMarkdown(profileText, getMainMenu());
+    ctx.reply(profileText, getMainMenu());
   } catch (error) {
     console.error('Error in showProfile:', error);
     ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
@@ -540,8 +502,8 @@ async function showPremiumInfo(ctx) {
     const user = await redisHelpers.getUser(userId);
     
     if (user && user.premium) {
-      return ctx.replyWithMarkdown(
-        `💎 *У вас уже есть премиум-подписка!*\n\n` +
+      return ctx.reply(
+        `💎 У вас уже есть премиум-подписка!\n\n` +
         `✨ Преимущества:\n` +
         `• 🚻 Поиск по полу\n` +
         `• ♾️ Неограниченный поиск\n` +
@@ -550,9 +512,9 @@ async function showPremiumInfo(ctx) {
       );
     }
     
-    ctx.replyWithMarkdown(
-      `💎 *Премиум-подписка* - ${CONFIG.PREMIUM_COST} руб.\n\n` +
-      `✨ *Преимущества:*\n` +
+    ctx.reply(
+      `💎 Премиум-подписка - ${CONFIG.PREMIUM_COST} руб.\n\n` +
+      `✨ Преимущества:\n` +
       `• 🚻 Поиск по полу (мужской/женский)\n` +
       `• ♾️ Неограниченное количество поисков\n` +
       `• ⚡ Приоритет в очереди поиска\n\n` +
@@ -576,18 +538,7 @@ bot.action('search_by_gender', async (ctx) => {
     const user = await redisHelpers.getUser(userId);
     
     if (!user || !user.premium) {
-      try {
-        await ctx.deleteMessage();
-      } catch (e) {
-        console.log('Не удалось удалить сообщение:', e.message);
-      }
       return ctx.reply('❌ Эта функция доступна только премиум-пользователям');
-    }
-    
-    try {
-      await ctx.deleteMessage();
-    } catch (e) {
-      console.log('Не удалось удалить сообщение:', e.message);
     }
     
     ctx.reply(
@@ -611,12 +562,6 @@ bot.action(/^find_(male|female)$/, async (ctx) => {
     const gender = ctx.match[1];
     const userId = ctx.from.id;
     
-    try {
-      await ctx.deleteMessage();
-    } catch (e) {
-      console.log('Не удалось удалить сообщение:', e.message);
-    }
-    
     ctx.reply(
       `🔍 Ищем ${gender === 'male' ? '👨 мужчину' : '👩 женщину'}...\n\n/stopp - остановить поиск`,
       Markup.inlineKeyboard([
@@ -636,12 +581,6 @@ bot.action('search_random', async (ctx) => {
   try {
     await ctx.answerCbQuery();
     const userId = ctx.from.id;
-    
-    try {
-      await ctx.deleteMessage();
-    } catch (e) {
-      console.log('Не удалось удалить сообщение:', e.message);
-    }
     
     ctx.reply(
       '🔍 Ищем случайного собеседника...\n\n/stopp - остановить поиск',
@@ -670,12 +609,6 @@ bot.action('cancel_search', async (ctx) => {
       await redisHelpers.removeFromAllQueues(userId);
     }
     
-    try {
-      await ctx.deleteMessage();
-    } catch (e) {
-      console.log('Не удалось удалить сообщение:', e.message);
-    }
-    
     ctx.reply('❌ Поиск отменен', getMainMenu());
   } catch (error) {
     console.error('Error in cancel_search:', error);
@@ -689,15 +622,19 @@ async function findChatPartner(userId, targetGender) {
     const user = await redisHelpers.getUser(userId);
     if (!user || user.state !== USER_STATE.SEARCHING) return;
     
+    // Ищем партнера в очереди
     const partnerId = await redisHelpers.findPartner(targetGender, userId);
     
     if (partnerId) {
+      // Нашли партнера - создаем чат
       await redisHelpers.removeFromQueue(partnerId, targetGender);
       await redisHelpers.removeFromQueue(userId, targetGender);
       await createChat(userId, parseInt(partnerId));
     } else {
+      // Не нашли партнера - добавляем в очередь
       await redisHelpers.addToQueue(userId, targetGender);
       
+      // Устанавливаем таймаут для поиска
       setTimeout(async () => {
         try {
           const currentUser = await redisHelpers.getUser(userId);
@@ -726,16 +663,20 @@ async function createChat(user1Id, user2Id) {
     
     if (!user1 || !user2) return;
     
+    // Обновляем состояние пользователей
     user1.state = USER_STATE.IN_CHAT;
     user2.state = USER_STATE.IN_CHAT;
     await redisHelpers.setUser(user1Id, user1);
     await redisHelpers.setUser(user2Id, user2);
     
+    // Создаем ID чата
     const chatId = `${user1Id}_${user2Id}_${Date.now()}`;
     
+    // Сохраняем активный чат
     await redisHelpers.setActiveChat(user1Id, user2Id, chatId);
     await redisHelpers.setActiveChat(user2Id, user1Id, chatId);
     
+    // Отправляем сообщения пользователям
     const user1Gender = user1.gender === 'male' ? '👨' : '👩';
     const user2Gender = user2.gender === 'male' ? '👨' : '👩';
     
@@ -754,17 +695,6 @@ async function createChat(user1Id, user2Id) {
       `/stopp - завершить диалог`,
       Markup.keyboard(['/stopp']).resize()
     );
-    
-    setTimeout(async () => {
-      try {
-        const chat = await redisHelpers.getActiveChat(user1Id);
-        if (chat && chat.chatId === chatId) {
-          await endChat(chatId);
-        }
-      } catch (error) {
-        console.error('Error in chat timeout:', error);
-      }
-    }, CONFIG.CHAT_TIMEOUT);
   } catch (error) {
     console.error('Error in createChat:', error);
     await bot.telegram.sendMessage(user1Id, '❌ Произошла ошибка при создании чата. Пожалуйста, попробуйте еще раз.');
@@ -821,6 +751,7 @@ bot.command('stopp', async (ctx) => {
       return ctx.reply('Пожалуйста, начните с команды /start');
     }
     
+    // Если пользователь в чате
     if (user.state === USER_STATE.IN_CHAT) {
       const chat = await redisHelpers.getActiveChat(userId);
       if (chat) {
@@ -834,6 +765,7 @@ bot.command('stopp', async (ctx) => {
       return;
     }
     
+    // Если пользователь в поиске
     if (user.state === USER_STATE.SEARCHING) {
       user.state = USER_STATE.MAIN_MENU;
       await redisHelpers.setUser(userId, user);
@@ -864,8 +796,7 @@ module.exports = async (req, res) => {
       res.status(200).json({ 
         status: 'active',
         service: 'Anonymous Chat Bot',
-        version: '2.1',
-        redis: 'Upstash'
+        version: '2.2'
       });
     }
   } catch (err) {
@@ -874,4 +805,4 @@ module.exports = async (req, res) => {
   }
 };
 
-console.log('Anonymous Chat Bot started with Redis support');
+console.log('Anonymous Chat Bot started');
