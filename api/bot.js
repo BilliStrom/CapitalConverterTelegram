@@ -1,8 +1,11 @@
 const { Telegraf, Markup } = require('telegraf');
-const NodeCache = require('node-cache');
+const { Redis } = require('@upstash/redis');
 
-// Инициализация кэша
-const cache = new NodeCache({ stdTTL: 3600, checkperiod: 600 });
+// Инициализация Redis
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
 // Конфигурация
 const CONFIG = {
@@ -11,7 +14,7 @@ const CONFIG = {
   PREMIUM_COST: 100,
   SESSION_TIMEOUT: 600000,
   CHAT_TIMEOUT: 3600000,
-  // URLs для юридических документов
+  SEARCH_TIMEOUT: 300000, // 5 минут
   TERMS_URL: 'https://yourwebsite.com/terms',
   PRIVACY_URL: 'https://yourwebsite.com/privacy',
   SUPPORT_URL: 'https://t.me/your_support'
@@ -21,15 +24,6 @@ const CONFIG = {
 const bot = new Telegraf(process.env.BOT_TOKEN, {
   telegram: { webhookReply: false }
 });
-
-// Хранилища данных (в продакшене заменить на БД)
-const userData = new Map();
-const activeChats = new Map();
-const searchQueue = {
-  male: [],
-  female: [],
-  any: []
-};
 
 // Состояния бота
 const USER_STATE = {
@@ -79,12 +73,93 @@ const LEGAL_TEXTS = {
 Полная версия: ${CONFIG.PRIVACY_URL}`
 };
 
-// Функция для получения главного меню
-function getMainMenu(userId) {
-  const user = userData.get(userId);
-  const isPremium = user && user.premium;
-  const searchesLeft = user ? user.searchesLeft : 0;
+// Вспомогательные функции для работы с Redis
+const redisHelpers = {
+  // Сохранение данных пользователя
+  setUser: async (userId, data) => {
+    await redis.set(`user:${userId}`, JSON.stringify(data));
+  },
   
+  // Получение данных пользователя
+  getUser: async (userId) => {
+    const data = await redis.get(`user:${userId}`);
+    return data ? JSON.parse(data) : null;
+  },
+  
+  // Добавление в очередь поиска
+  addToQueue: async (userId, gender) => {
+    await redis.sadd(`queue:${gender}`, userId);
+    await redis.set(`search_time:${userId}`, Date.now());
+  },
+  
+  // Удаление из очереди поиска
+  removeFromQueue: async (userId, gender) => {
+    await redis.srem(`queue:${gender}`, userId);
+    await redis.del(`search_time:${userId}`);
+  },
+  
+  // Проверка наличия в очереди
+  isInQueue: async (userId, gender) => {
+    return await redis.sismember(`queue:${gender}`, userId);
+  },
+  
+  // Получение всех участников очереди
+  getQueue: async (gender) => {
+    return await redis.smembers(`queue:${gender}`);
+  },
+  
+  // Поиск партнера в очереди (исключая текущего пользователя)
+  findPartner: async (gender, excludeUserId) => {
+    const queue = await redis.smembers(`queue:${gender}`);
+    for (const userId of queue) {
+      if (userId !== excludeUserId.toString()) {
+        return userId;
+      }
+    }
+    return null;
+  },
+  
+  // Создание активного чата
+  setActiveChat: async (userId, partnerId, chatId) => {
+    await redis.set(`chat:${userId}`, JSON.stringify({
+      partnerId,
+      chatId,
+      startedAt: Date.now()
+    }));
+  },
+  
+  // Получение активного чата
+  getActiveChat: async (userId) => {
+    const data = await redis.get(`chat:${userId}`);
+    return data ? JSON.parse(data) : null;
+  },
+  
+  // Удаление активного чата
+  removeActiveChat: async (userId) => {
+    const chat = await redisHelpers.getActiveChat(userId);
+    if (chat) {
+      await redis.del(`chat:${userId}`);
+      await redis.del(`chat:${chat.partnerId}`);
+    }
+    return chat;
+  },
+  
+  // Удаление из всех очередей поиска
+  removeFromAllQueues: async (userId) => {
+    const genders = ['male', 'female', 'any'];
+    for (const gender of genders) {
+      await redisHelpers.removeFromQueue(userId, gender);
+    }
+  },
+  
+  // Получение времени начала поиска
+  getSearchTime: async (userId) => {
+    return await redis.get(`search_time:${userId}`);
+  }
+};
+
+// Функция для получения главного меню
+function getMainMenu() {
   return Markup.keyboard([
     ['🔍 Найти собеседника', '🚻 Мой профиль'],
     ['💎 Премиум подписка', '📞 Поддержка'],
@@ -97,28 +172,30 @@ bot.command('start', async (ctx) => {
   const userId = ctx.from.id;
   
   // Проверяем, есть ли пользователь в системе
-  if (!userData.has(userId)) {
+  let user = await redisHelpers.getUser(userId);
+  
+  if (!user) {
     // Новый пользователь - начинаем с проверки возраста
-    userData.set(userId, {
+    user = {
       state: USER_STATE.AGE_VERIFICATION,
       id: userId,
       username: ctx.from.username || `user_${userId}`,
       first_name: ctx.from.first_name,
-      last_name: ctx.from.last_name,
+      last_name: ctx.from.last_name || '',
       acceptedTerms: false,
       ageVerified: false,
       searchesLeft: CONFIG.FREE_SEARCH_LIMIT,
       premium: false,
-      createdAt: new Date()
-    });
+      createdAt: new Date().toISOString()
+    };
+    
+    await redisHelpers.setUser(userId, user);
   }
-  
-  const user = userData.get(userId);
   
   // Проверка возраста для новых пользователей
   if (!user.ageVerified) {
     user.state = USER_STATE.AGE_VERIFICATION;
-    userData.set(userId, user);
+    await redisHelpers.setUser(userId, user);
     
     return ctx.replyWithMarkdown(
       `👋 Добро пожаловать в *Анонимный Чат*!\n\n` +
@@ -134,7 +211,7 @@ bot.command('start', async (ctx) => {
   // Принятие условий использования
   if (!user.acceptedTerms) {
     user.state = USER_STATE.TERMS_ACCEPTANCE;
-    userData.set(userId, user);
+    await redisHelpers.setUser(userId, user);
     
     return ctx.replyWithMarkdown(
       `📋 Для продолжения необходимо принять наши правила:\n\n${LEGAL_TEXTS.terms}\n\n` +
@@ -149,7 +226,7 @@ bot.command('start', async (ctx) => {
   // Настройка профиля
   if (!user.gender) {
     user.state = USER_STATE.PROFILE_SETUP;
-    userData.set(userId, user);
+    await redisHelpers.setUser(userId, user);
     
     return ctx.reply(
       '🚻 Для начала выберите ваш пол:',
@@ -162,25 +239,25 @@ bot.command('start', async (ctx) => {
   
   // Главное меню
   user.state = USER_STATE.MAIN_MENU;
-  userData.set(userId, user);
+  await redisHelpers.setUser(userId, user);
   
   const welcomeMessage = `✨ Добро пожаловать в *Анонимный Чат*!\n\n` +
     `🔍 Бесплатных поисков: ${user.searchesLeft}\n` +
     `💎 Статус: ${user.premium ? 'Премиум' : 'Обычный'}\n\n` +
     `Выберите действие:`;
   
-  ctx.replyWithMarkdown(welcomeMessage, getMainMenu(userId));
+  ctx.replyWithMarkdown(welcomeMessage, getMainMenu());
 });
 
 // Обработка подтверждения возраста
 bot.action('age_confirm_yes', async (ctx) => {
   const userId = ctx.from.id;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (user) {
     user.ageVerified = true;
     user.state = USER_STATE.TERMS_ACCEPTANCE;
-    userData.set(userId, user);
+    await redisHelpers.setUser(userId, user);
     
     try {
       await ctx.deleteMessage();
@@ -212,12 +289,12 @@ bot.action('age_confirm_no', async (ctx) => {
 // Обработка принятия правил
 bot.action('terms_accept', async (ctx) => {
   const userId = ctx.from.id;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (user) {
     user.acceptedTerms = true;
     user.state = USER_STATE.PROFILE_SETUP;
-    userData.set(userId, user);
+    await redisHelpers.setUser(userId, user);
     
     try {
       await ctx.deleteMessage();
@@ -249,12 +326,12 @@ bot.action('terms_decline', async (ctx) => {
 bot.action(/^gender_(male|female)$/, async (ctx) => {
   const gender = ctx.match[1];
   const userId = ctx.from.id;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (user) {
     user.gender = gender;
     user.state = USER_STATE.MAIN_MENU;
-    userData.set(userId, user);
+    await redisHelpers.setUser(userId, user);
     
     try {
       await ctx.deleteMessage();
@@ -267,7 +344,7 @@ bot.action(/^gender_(male|female)$/, async (ctx) => {
       `💎 Статус: ${user.premium ? 'Премиум' : 'Обычный'}\n\n` +
       `Выберите действие:`;
     
-    ctx.replyWithMarkdown(welcomeMessage, getMainMenu(userId));
+    ctx.replyWithMarkdown(welcomeMessage, getMainMenu());
   }
 });
 
@@ -275,7 +352,7 @@ bot.action(/^gender_(male|female)$/, async (ctx) => {
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (!user) {
     return ctx.reply('Пожалуйста, начните с команды /start');
@@ -283,7 +360,7 @@ bot.on('text', async (ctx) => {
   
   // Проверяем, находится ли пользователь в чате
   if (user.state === USER_STATE.IN_CHAT) {
-    const chat = activeChats.get(userId);
+    const chat = await redisHelpers.getActiveChat(userId);
     if (chat && chat.partnerId) {
       try {
         // Пересылаем сообщение партнеру
@@ -291,7 +368,7 @@ bot.on('text', async (ctx) => {
         ctx.reply('✅ Сообщение отправлено');
       } catch (error) {
         ctx.reply('❌ Не удалось отправить сообщение. Возможно, собеседник вышел из чата.');
-        endChat(chat.chatId);
+        await endChat(chat.chatId);
       }
     }
     return;
@@ -300,13 +377,13 @@ bot.on('text', async (ctx) => {
   // Обработка главного меню
   switch (text) {
     case '🔍 Найти собеседника':
-      handleSearch(ctx);
+      await handleSearch(ctx);
       break;
     case '🚻 Мой профиль':
-      showProfile(ctx);
+      await showProfile(ctx);
       break;
     case '💎 Премиум подписка':
-      showPremiumInfo(ctx);
+      await showPremiumInfo(ctx);
       break;
     case '📞 Поддержка':
       ctx.replyWithMarkdown(`🆘 *Поддержка*\n\nПо всем вопросам обращайтесь: ${CONFIG.SUPPORT_URL}`);
@@ -318,17 +395,17 @@ bot.on('text', async (ctx) => {
       ctx.reply('До свидания! Если захотите вернуться, используйте /start');
       break;
     default:
-      ctx.reply('Используйте кнопки меню для навигации', getMainMenu(userId));
+      ctx.reply('Используйте кнопки меню для навигации', getMainMenu());
   }
 });
 
 // Поиск собеседника
-function handleSearch(ctx) {
+async function handleSearch(ctx) {
   const userId = ctx.from.id;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (!user || !user.gender) {
-    return ctx.reply('Сначала настройте профиль', getMainMenu(userId));
+    return ctx.reply('Сначала настройте профиль', getMainMenu());
   }
   
   if (user.searchesLeft <= 0 && !user.premium) {
@@ -345,11 +422,11 @@ function handleSearch(ctx) {
   // Уменьшаем счетчик поисков для бесплатных пользователей
   if (!user.premium) {
     user.searchesLeft--;
-    userData.set(userId, user);
+    await redisHelpers.setUser(userId, user);
   }
   
   user.state = USER_STATE.SEARCHING;
-  userData.set(userId, user);
+  await redisHelpers.setUser(userId, user);
   
   // Показываем варианты поиска
   if (user.premium) {
@@ -368,14 +445,14 @@ function handleSearch(ctx) {
         [Markup.button.callback('❌ Остановить поиск', 'cancel_search')]
       ])
     );
-    findChatPartner(userId, 'any');
+    await findChatPartner(userId, 'any');
   }
 }
 
 // Показ профиля
-function showProfile(ctx) {
+async function showProfile(ctx) {
   const userId = ctx.from.id;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (!user) {
     return ctx.reply('Пожалуйста, начните с команды /start');
@@ -386,15 +463,15 @@ function showProfile(ctx) {
     `Пол: ${user.gender === 'male' ? '👨 Мужской' : '👩 Женский'}\n` +
     `Статус: ${user.premium ? '💎 Премиум' : '🔓 Обычный'}\n` +
     `Поисков осталось: ${user.searchesLeft}\n` +
-    `Дата регистрации: ${user.createdAt.toLocaleDateString('ru-RU')}`;
+    `Дата регистрации: ${new Date(user.createdAt).toLocaleDateString('ru-RU')}`;
   
-  ctx.replyWithMarkdown(profileText, getMainMenu(userId));
+  ctx.replyWithMarkdown(profileText, getMainMenu());
 }
 
 // Информация о премиум подписке
-function showPremiumInfo(ctx) {
+async function showPremiumInfo(ctx) {
   const userId = ctx.from.id;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (user && user.premium) {
     return ctx.replyWithMarkdown(
@@ -403,7 +480,7 @@ function showPremiumInfo(ctx) {
       `• 🚻 Поиск по полу\n` +
       `• ♾️ Неограниченный поиск\n` +
       `• ⚡ Приоритет в очереди`,
-      getMainMenu(userId)
+      getMainMenu()
     );
   }
   
@@ -424,7 +501,7 @@ function showPremiumInfo(ctx) {
 // Поиск собеседника по полу (премиум)
 bot.action('search_by_gender', async (ctx) => {
   const userId = ctx.from.id;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (!user || !user.premium) {
     try {
@@ -469,7 +546,7 @@ bot.action(/^find_(male|female)$/, async (ctx) => {
     ])
   );
   
-  findChatPartner(userId, gender);
+  await findChatPartner(userId, gender);
 });
 
 // Случайный поиск
@@ -489,20 +566,20 @@ bot.action('search_random', async (ctx) => {
     ])
   );
   
-  findChatPartner(userId, 'any');
+  await findChatPartner(userId, 'any');
 });
 
 // Отмена поиска
 bot.action('cancel_search', async (ctx) => {
   const userId = ctx.from.id;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (user) {
     user.state = USER_STATE.MAIN_MENU;
-    userData.set(userId, user);
+    await redisHelpers.setUser(userId, user);
     
     // Удаляем из очереди поиска
-    removeFromSearchQueues(userId);
+    await redisHelpers.removeFromAllQueues(userId);
   }
   
   try {
@@ -511,67 +588,60 @@ bot.action('cancel_search', async (ctx) => {
     console.log('Не удалось удалить сообщение:', e.message);
   }
   
-  ctx.reply('❌ Поиск отменен', getMainMenu(userId));
+  ctx.reply('❌ Поиск отменен', getMainMenu());
 });
 
 // Поиск собеседника
-function findChatPartner(userId, targetGender) {
-  const user = userData.get(userId);
-  if (!user) return;
+async function findChatPartner(userId, targetGender) {
+  const user = await redisHelpers.getUser(userId);
+  if (!user || user.state !== USER_STATE.SEARCHING) return;
   
-  const queue = searchQueue[targetGender];
+  // Ищем партнера в очереди
+  const partnerId = await redisHelpers.findPartner(targetGender, userId);
   
-  // Если пользователь уже в очереди
-  if (queue.includes(userId)) {
-    return;
-  }
-  
-  // Добавляем в очередь
-  queue.push(userId);
-  
-  // Ищем подходящего собеседника
-  if (queue.length >= 2) {
-    const partnerId = queue.find(id => id !== userId);
-    if (partnerId) {
-      // Удаляем из очереди
-      const index = queue.indexOf(partnerId);
-      if (index > -1) queue.splice(index, 1);
-      const userIndex = queue.indexOf(userId);
-      if (userIndex > -1) queue.splice(userIndex, 1);
-      
-      // Создаем чат
-      createChat(userId, partnerId);
-    }
+  if (partnerId) {
+    // Нашли партнера - создаем чат
+    await redisHelpers.removeFromQueue(partnerId, targetGender);
+    await redisHelpers.removeFromQueue(userId, targetGender);
+    await createChat(userId, parseInt(partnerId));
+  } else {
+    // Не нашли партнера - добавляем в очередь
+    await redisHelpers.addToQueue(userId, targetGender);
+    
+    // Устанавливаем таймаут для поиска
+    setTimeout(async () => {
+      const currentUser = await redisHelpers.getUser(userId);
+      if (currentUser && currentUser.state === USER_STATE.SEARCHING) {
+        await redisHelpers.removeFromAllQueues(userId);
+        currentUser.state = USER_STATE.MAIN_MENU;
+        await redisHelpers.setUser(userId, currentUser);
+        ctx.reply('❌ Поиск завершен. Не удалось найти собеседника.', getMainMenu());
+      }
+    }, CONFIG.SEARCH_TIMEOUT);
   }
 }
 
 // Создание чата
-function createChat(user1Id, user2Id) {
-  const chatId = `${user1Id}_${user2Id}_${Date.now()}`;
-  
-  const user1 = userData.get(user1Id);
-  const user2 = userData.get(user2Id);
+async function createChat(user1Id, user2Id) {
+  const user1 = await redisHelpers.getUser(user1Id);
+  const user2 = await redisHelpers.getUser(user2Id);
   
   if (!user1 || !user2) return;
   
   // Обновляем состояние пользователей
   user1.state = USER_STATE.IN_CHAT;
   user2.state = USER_STATE.IN_CHAT;
-  userData.set(user1Id, user1);
-  userData.set(user2Id, user2);
+  await redisHelpers.setUser(user1Id, user1);
+  await redisHelpers.setUser(user2Id, user2);
+  
+  // Создаем ID чата
+  const chatId = `${user1Id}_${user2Id}_${Date.now()}`;
   
   // Сохраняем активный чат
-  activeChats.set(user1Id, { partnerId: user2Id, chatId });
-  activeChats.set(user2Id, { partnerId: user1Id, chatId });
+  await redisHelpers.setActiveChat(user1Id, user2Id, chatId);
+  await redisHelpers.setActiveChat(user2Id, user1Id, chatId);
   
-  // Таймаут чата
-  const timeout = setTimeout(() => {
-    endChat(chatId);
-  }, CONFIG.CHAT_TIMEOUT);
-  
-  cache.set(`chat_${chatId}`, timeout);
-  
-  // Уведомляем пользователей
+  // Отправляем сообщения пользователям
   const user1Gender = user1.gender === 'male' ? '👨' : '👩';
   const user2Gender = user2.gender === 'male' ? '👨' : '👩';
   
@@ -590,54 +660,50 @@ function createChat(user1Id, user2Id) {
     `/stopp - завершить диалог`,
     Markup.keyboard(['/stopp']).resize()
   );
+  
+  // Устанавливаем таймаут чата
+  setTimeout(async () => {
+    const chat = await redisHelpers.getActiveChat(user1Id);
+    if (chat && chat.chatId === chatId) {
+      await endChat(chatId);
+    }
+  }, CONFIG.CHAT_TIMEOUT);
 }
 
 // Завершение чата
-function endChat(chatId) {
+async function endChat(chatId) {
   const [user1Id, user2Id] = chatId.split('_');
   const id1 = parseInt(user1Id);
   const id2 = parseInt(user2Id);
   
-  const user1 = userData.get(id1);
-  const user2 = userData.get(id2);
+  const user1 = await redisHelpers.getUser(id1);
+  const user2 = await redisHelpers.getUser(id2);
   
   if (user1) {
     user1.state = USER_STATE.MAIN_MENU;
-    userData.set(id1, user1);
+    await redisHelpers.setUser(id1, user1);
   }
   
   if (user2) {
     user2.state = USER_STATE.MAIN_MENU;
-    userData.set(id2, user2);
+    await redisHelpers.setUser(id2, user2);
   }
   
-  activeChats.delete(id1);
-  activeChats.delete(id2);
+  await redisHelpers.removeActiveChat(id1);
+  await redisHelpers.removeActiveChat(id2);
   
-  const timeout = cache.get(`chat_${chatId}`);
-  if (timeout) {
-    clearTimeout(timeout);
-    cache.del(`chat_${chatId}`);
+  try {
+    await bot.telegram.sendMessage(id1, '❌ Диалог завершен', getMainMenu());
+    await bot.telegram.sendMessage(id2, '❌ Диалог завершен', getMainMenu());
+  } catch (error) {
+    console.log('Ошибка при отправке сообщения о завершении чата:', error.message);
   }
-  
-  bot.telegram.sendMessage(id1, '❌ Диалог завершен', getMainMenu(id1));
-  bot.telegram.sendMessage(id2, '❌ Диалог завершен', getMainMenu(id2));
-}
-
-// Удаление из всех очередей поиска
-function removeFromSearchQueues(userId) {
-  Object.keys(searchQueue).forEach(gender => {
-    const index = searchQueue[gender].indexOf(userId);
-    if (index > -1) {
-      searchQueue[gender].splice(index, 1);
-    }
-  });
 }
 
 // Команда /stopp для остановки диалога или поиска
-bot.command('stopp', (ctx) => {
+bot.command('stopp', async (ctx) => {
   const userId = ctx.from.id;
-  const user = userData.get(userId);
+  const user = await redisHelpers.getUser(userId);
   
   if (!user) {
     return ctx.reply('Пожалуйста, начните с команды /start');
@@ -645,14 +711,14 @@ bot.command('stopp', (ctx) => {
   
   // Если пользователь в чате
   if (user.state === USER_STATE.IN_CHAT) {
-    const chat = activeChats.get(userId);
+    const chat = await redisHelpers.getActiveChat(userId);
     if (chat) {
-      endChat(chat.chatId);
-      ctx.reply('✅ Диалог завершен', getMainMenu(userId));
+      await endChat(chat.chatId);
+      ctx.reply('✅ Диалог завершен', getMainMenu());
     } else {
       user.state = USER_STATE.MAIN_MENU;
-      userData.set(userId, user);
-      ctx.reply('❌ Активный диалог не найден', getMainMenu(userId));
+      await redisHelpers.setUser(userId, user);
+      ctx.reply('❌ Активный диалог не найден', getMainMenu());
     }
     return;
   }
@@ -660,16 +726,22 @@ bot.command('stopp', (ctx) => {
   // Если пользователь в поиске
   if (user.state === USER_STATE.SEARCHING) {
     user.state = USER_STATE.MAIN_MENU;
-    userData.set(userId, user);
+    await redisHelpers.setUser(userId, user);
     
     // Удаляем из очереди поиска
-    removeFromSearchQueues(userId);
+    await redisHelpers.removeFromAllQueues(userId);
     
-    ctx.reply('✅ Поиск остановлен', getMainMenu(userId));
+    ctx.reply('✅ Поиск остановлен', getMainMenu());
     return;
   }
   
-  ctx.reply('❌ Сейчас нечего останавливать', getMainMenu(userId));
+  ctx.reply('❌ Сейчас нечего останавливать', getMainMenu());
+});
+
+// Обработка ошибок
+bot.catch((err, ctx) => {
+  console.error(`Ошибка для ${ctx.updateType}:`, err);
+  ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
 });
 
 // Обработчик для Vercel
@@ -682,8 +754,7 @@ module.exports = async (req, res) => {
         status: 'active',
         service: 'Anonymous Chat Bot',
         version: '2.0',
-        users: userData.size,
-        activeChats: activeChats.size
+        redis: 'Upstash'
       });
     }
   } catch (err) {
@@ -692,4 +763,4 @@ module.exports = async (req, res) => {
   }
 };
 
-console.log('Anonymous Chat Bot started');
+console.log('Anonymous Chat Bot started with Redis support');
