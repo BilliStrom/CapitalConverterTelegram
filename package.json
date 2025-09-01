@@ -1,7 +1,7 @@
 {
   "name": "anonymous-chat-bot",
   "version": "2.0.0",
-  "description": "Telegram Anonymous Chat Bot with legal compliance",
+  "description": "Telegram Anonymous Chat Bot with Redis support",
   "main": "api/bot.js",
   "scripts": {
     "start": "node api/bot.js",
@@ -13,8 +13,7 @@
   },
   "dependencies": {
     "telegraf": "^4.12.2",
-    "node-cache": "^5.1.2",
-    "axios": "^1.7.2"
+    "@upstash/redis": "^1.22.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
@@ -24,7 +23,7 @@
     "bot",
     "anonymous",
     "chat",
-    "compliant"
+    "redis"
   ],
   "author": "Your Name",
   "license": "MIT"
