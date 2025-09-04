@@ -20,9 +20,6 @@ const CONFIG = {
   SUPPORT_URL: 'https://t.me/your_support'
 };
 
-// Инициализация бота
-const bot = new Telegraf(process.env.BOT_TOKEN);
-
 // Вспомогательные функции для работы с Redis
 const redisHelpers = {
   setUser: async (userId, data) => {
@@ -34,7 +31,7 @@ const redisHelpers = {
       return false;
     }
   },
-  
+
   getUser: async (userId) => {
     try {
       const data = await redis.get(`user:${userId}`);
@@ -55,71 +52,80 @@ function getMainMenu() {
   ]).resize();
 }
 
+// Инициализация бота
+const bot = new Telegraf(process.env.BOT_TOKEN);
+
 // Команда /start - начальная точка
 bot.command('start', async (ctx) => {
   try {
     const userId = ctx.from.id;
-    
     let user = await redisHelpers.getUser(userId);
     
     if (!user) {
+      // Создаем нового пользователя
       user = {
         id: userId,
-        username: ctx.from.username || `user_${userId}`,
-        first_name: ctx.from.first_name,
+        username: ctx.from.username || '',
+        first_name: ctx.from.first_name || '',
         last_name: ctx.from.last_name || '',
-        acceptedTerms: false,
         ageVerified: false,
-        searchesLeft: CONFIG.FREE_SEARCH_LIMIT,
+        termsAccepted: false,
+        gender: null,
+        searches: 0,
         premium: false,
         createdAt: new Date().toISOString()
       };
       
       await redisHelpers.setUser(userId, user);
-    }
-    
-    if (!user.ageVerified) {
+      
+      // Запрос подтверждения возраста
       await ctx.reply(
-        `👋 Добро пожаловать в Анонимный Чат!\n\n` +
-        `Для использования сервиса вам должно быть не менее 18 лет.\n\n` +
-        `Подтверждаете, что вам есть 18 лет?`,
+        '👋 Добро пожаловать в анонимный чат!',
         Markup.inlineKeyboard([
-          [Markup.button.callback('✅ Да, мне есть 18 лет', 'age_confirm_yes')],
-          [Markup.button.callback('❌ Нет', 'age_confirm_no')]
+          Markup.button.callback('✅ Да, мне есть 18 лет', 'age_confirm_yes'),
+          Markup.button.callback('❌ Нет', 'age_confirm_no')
         ])
       );
-      return;
-    }
-    
-    if (!user.acceptedTerms) {
+    } else if (!user.ageVerified) {
+      // Пользователь существует, но не подтвердил возраст
       await ctx.reply(
-        `📋 Для продолжения необходимо принять наши правила.\n\n` +
-        `Соглашаетесь с условиями?`,
+        'Для использования бота вам должно быть больше 18 лет.',
         Markup.inlineKeyboard([
-          [Markup.button.callback('✅ Принимаю', 'terms_accept')],
-          [Markup.button.callback('❌ Не принимаю', 'terms_decline')]
+          Markup.button.callback('✅ Да, мне есть 18 лет', 'age_confirm_yes'),
+          Markup.button.callback('❌ Нет', 'age_confirm_no')
         ])
       );
-      return;
-    }
-    
-    if (!user.gender) {
+    } else if (!user.termsAccepted) {
+      // Возраст подтвержден, но не приняты правила
       await ctx.reply(
-        '🚻 Для начала выберите ваш пол:',
+        `📜 Пожалуйста, ознакомьтесь с нашими правилами:\n\n` +
+        `1. Запрещены оскорбления и угрозы\n` +
+        `2. Запрещен спам и реклама\n` +
+        `3. Запрещен контент для взрослых\n` +
+        `4. Уважайте других пользователей\n\n` +
+        `Полные правила: ${CONFIG.TERMS_URL}\n` +
+        `Политика конфиденциальности: ${CONFIG.PRIVACY_URL}`,
         Markup.inlineKeyboard([
-          [Markup.button.callback('👨 Мужской', 'gender_male')],
-          [Markup.button.callback('👩 Женский', 'gender_female')]
+          Markup.button.callback('✅ Принимаю правила', 'terms_accept'),
+          Markup.button.callback('❌ Не принимаю', 'terms_decline')
         ])
       );
-      return;
+    } else if (!user.gender) {
+      // Правила приняты, но не указан пол
+      await ctx.reply(
+        'Выберите ваш пол:',
+        Markup.inlineKeyboard([
+          Markup.button.callback('👨 Мужской', 'gender_male'),
+          Markup.button.callback('👩 Женский', 'gender_female')
+        ])
+      );
+    } else {
+      // Все данные есть, показываем главное меню
+      await ctx.reply(
+        'Главное меню:',
+        getMainMenu()
+      );
     }
-    
-    const welcomeMessage = `✨ Добро пожаловать в Анонимный Чат!\n\n` +
-      `🔍 Бесплатных поисков: ${user.searchesLeft}\n` +
-      `💎 Статус: ${user.premium ? 'Премиум' : 'Обычный'}\n\n` +
-      `Выберите действие:`;
-    
-    await ctx.reply(welcomeMessage, getMainMenu());
   } catch (error) {
     console.error('Error in start command:', error);
     await ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
@@ -129,9 +135,7 @@ bot.command('start', async (ctx) => {
 // Обработка подтверждения возраста
 bot.action('age_confirm_yes', async (ctx) => {
   try {
-    // Отвечаем на callback запрос
     await ctx.answerCbQuery();
-    
     const userId = ctx.from.id;
     const user = await redisHelpers.getUser(userId);
     
@@ -139,13 +143,18 @@ bot.action('age_confirm_yes', async (ctx) => {
       user.ageVerified = true;
       await redisHelpers.setUser(userId, user);
       
-      // Отправляем новое сообщение
-      await ctx.reply(
-        `📋 Для продолжения необходимо принять наши правила.\n\n` +
-        `Соглашаетесь с условиями?`,
+      // Запрашиваем принятие правил
+      await ctx.editMessageText(
+        `📜 Пожалуйста, ознакомьтесь с нашими правилами:\n\n` +
+        `1. Запрещены оскорбления и угрозы\n` +
+        `2. Запрещен спам и реклама\n` +
+        `3. Запрещен контент для взрослых\n` +
+        `4. Уважайте других пользователей\n\n` +
+        `Полные правила: ${CONFIG.TERMS_URL}\n` +
+        `Политика конфиденциальности: ${CONFIG.PRIVACY_URL}`,
         Markup.inlineKeyboard([
-          [Markup.button.callback('✅ Принимаю', 'terms_accept')],
-          [Markup.button.callback('❌ Не принимаю', 'terms_decline')]
+          Markup.button.callback('✅ Принимаю правила', 'terms_accept'),
+          Markup.button.callback('❌ Не принимаю', 'terms_decline')
         ])
       );
     }
@@ -158,7 +167,7 @@ bot.action('age_confirm_yes', async (ctx) => {
 bot.action('age_confirm_no', async (ctx) => {
   try {
     await ctx.answerCbQuery();
-    await ctx.reply('❌ Извините, этот сервис предназначен только для совершеннолетних пользователей.');
+    await ctx.editMessageText('❌ Извините, этот сервис предназначен только для совершеннолетних пользователей.');
   } catch (error) {
     console.error('Error in age rejection:', error);
     await ctx.answerCbQuery('❌ Произошла ошибка');
@@ -169,19 +178,19 @@ bot.action('age_confirm_no', async (ctx) => {
 bot.action('terms_accept', async (ctx) => {
   try {
     await ctx.answerCbQuery();
-    
     const userId = ctx.from.id;
     const user = await redisHelpers.getUser(userId);
     
     if (user) {
-      user.acceptedTerms = true;
+      user.termsAccepted = true;
       await redisHelpers.setUser(userId, user);
       
-      await ctx.reply(
-        '🚻 Для начала выберите ваш пол:',
+      // Запрашиваем пол
+      await ctx.editMessageText(
+        'Выберите ваш пол:',
         Markup.inlineKeyboard([
-          [Markup.button.callback('👨 Мужской', 'gender_male')],
-          [Markup.button.callback('👩 Женский', 'gender_female')]
+          Markup.button.callback('👨 Мужской', 'gender_male'),
+          Markup.button.callback('👩 Женский', 'gender_female')
         ])
       );
     }
@@ -194,7 +203,7 @@ bot.action('terms_accept', async (ctx) => {
 bot.action('terms_decline', async (ctx) => {
   try {
     await ctx.answerCbQuery();
-    await ctx.reply('❌ Для использования сервиса необходимо принять правила. Если передумаете - запустите бота снова командой /start');
+    await ctx.editMessageText('❌ Для использования сервиса необходимо принять правила. Если передумаете - запустите бота снова командой /start');
   } catch (error) {
     console.error('Error in terms rejection:', error);
     await ctx.answerCbQuery('❌ Произошла ошибка');
@@ -205,21 +214,19 @@ bot.action('terms_decline', async (ctx) => {
 bot.action(/^gender_(male|female)$/, async (ctx) => {
   try {
     await ctx.answerCbQuery();
-    
-    const gender = ctx.match[1];
     const userId = ctx.from.id;
+    const gender = ctx.match[1];
     const user = await redisHelpers.getUser(userId);
     
     if (user) {
       user.gender = gender;
       await redisHelpers.setUser(userId, user);
       
-      const welcomeMessage = `✨ Добро пожаловать в Анонимный Чат!\n\n` +
-        `🔍 Бесплатных поисков: ${user.searchesLeft}\n` +
-        `💎 Статус: ${user.premium ? 'Премиум' : 'Обычный'}\n\n` +
-        `Выберите действие:`;
-      
-      await ctx.reply(welcomeMessage, getMainMenu());
+      // Показываем главное меню
+      await ctx.editMessageText(
+        'Отлично! Теперь вы можете использовать все функции бота.',
+        getMainMenu()
+      );
     }
   } catch (error) {
     console.error('Error in gender selection:', error);
@@ -233,46 +240,86 @@ bot.on('text', async (ctx) => {
     const userId = ctx.from.id;
     const text = ctx.message.text;
     const user = await redisHelpers.getUser(userId);
-    
-    if (!user) {
-      return ctx.reply('Пожалуйста, начните с команды /start');
+
+    if (!user || !user.ageVerified || !user.termsAccepted || !user.gender) {
+      // Если пользователь не завершил регистрацию, отправляем на /start
+      return ctx.reply('Пожалуйста, завершите регистрацию:', Markup.inlineKeyboard([
+        Markup.button.callback('Начать регистрацию', 'start_registration')
+      ]));
     }
-    
+
+    // Обработка команд главного меню
     switch (text) {
       case '🔍 Найти собеседника':
-        await ctx.reply('🔍 Функция поиска временно недоступна. Мы работаем над её восстановлением.');
+        await ctx.reply('🔍 Поиск собеседника...');
+        // Здесь будет логика поиска
         break;
       case '🚻 Мой профиль':
-        const profileText = `👤 Ваш профиль\n\n` +
-          `Имя: ${user.first_name}${user.last_name ? ' ' + user.last_name : ''}\n` +
+        const profileText = `👤 Ваш профиль:\n\n` +
+          `Имя: ${user.first_name} ${user.last_name}\n` +
+          `Username: @${user.username || 'не указан'}\n` +
           `Пол: ${user.gender === 'male' ? '👨 Мужской' : '👩 Женский'}\n` +
-          `Статус: ${user.premium ? '💎 Премиум' : '🔓 Обычный'}\n` +
-          `Поисков осталось: ${user.searchesLeft}\n` +
-          `Дата регистрации: ${new Date(user.createdAt).toLocaleDateString('ru-RU')}`;
-        
-        await ctx.reply(profileText, getMainMenu());
+          `Поисков сегодня: ${user.searches}/${CONFIG.FREE_SEARCH_LIMIT}\n` +
+          `Статус: ${user.premium ? '💎 Премиум' : '🔓 Обычный'}`;
+        await ctx.reply(profileText);
         break;
       case '💎 Премиум подписка':
         await ctx.reply(
-          `💎 Премиум-подписка - ${CONFIG.PREMIUM_COST} руб.\n\n` +
-          `Для приобретения свяжитесь с администратором: @admin`
+          `💎 Премиум подписка:\n\n` +
+          `• Неограниченное количество поисков\n` +
+          `• Приоритет в поиске собеседников\n` +
+          `• Доступ к расширенной статистике\n\n` +
+          `Стоимость: ${CONFIG.PREMIUM_COST} руб.`,
+          Markup.inlineKeyboard([
+            Markup.button.callback('💳 Купить подписку', 'buy_premium')
+          ])
         );
         break;
       case '📞 Поддержка':
-        await ctx.reply(`🆘 Поддержка\n\nПо всем вопросам обращайтесь: ${CONFIG.SUPPORT_URL}`);
+        await ctx.reply(`📞 По всем вопросам обращайтесь в поддержку: ${CONFIG.SUPPORT_URL}`);
         break;
       case '📜 Правила':
-        await ctx.reply('📜 Правила использования:\n\n1. Быть вежливым\n2. Не спамить\n3. Уважать собеседников');
+        await ctx.reply(
+          `📜 Правила использования:\n\n` +
+          `1. Запрещены оскорбления и угрозы\n` +
+          `2. Запрещен спам и реклама\n` +
+          `3. Запрещен контент для взрослых\n` +
+          `4. Уважайте других пользователей\n\n` +
+          `Полные правила: ${CONFIG.TERMS_URL}`
+        );
         break;
       case '❌ Выход':
-        await ctx.reply('До свидания! Если захотите вернуться, используйте /start');
+        await ctx.reply(
+          'Вы уверены, что хотите выйти?',
+          Markup.keyboard([
+            ['✅ Да, выйти', '❌ Нет, остаться']
+          ]).resize()
+        );
         break;
       default:
-        await ctx.reply('Используйте кнопки меню для навигации', getMainMenu());
+        await ctx.reply('Используйте меню для навигации:', getMainMenu());
     }
   } catch (error) {
     console.error('Error in text processing:', error);
     await ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
+  }
+});
+
+// Обработчик для кнопки начала регистрации
+bot.action('start_registration', async (ctx) => {
+  try {
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage();
+    await ctx.reply(
+      'Для использования бота вам должно быть больше 18 лет.',
+      Markup.inlineKeyboard([
+        Markup.button.callback('✅ Да, мне есть 18 лет', 'age_confirm_yes'),
+        Markup.button.callback('❌ Нет', 'age_confirm_no')
+      ])
+    );
+  } catch (error) {
+    console.error('Error in start registration:', error);
+    await ctx.answerCbQuery('❌ Произошла ошибка');
   }
 });
 
@@ -283,9 +330,9 @@ module.exports = async (req, res) => {
       await bot.handleUpdate(req.body, res);
     } else {
       res.status(200).json({ 
-        status: 'active',
-        service: 'Anonymous Chat Bot',
-        version: '3.0'
+        status: 'active', 
+        service: 'Anonymous Chat Bot', 
+        version: '3.0' 
       });
     }
   } catch (err) {
