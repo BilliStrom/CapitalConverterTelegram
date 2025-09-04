@@ -1,6 +1,6 @@
 {
   "name": "anonymous-chat-bot",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Telegram Anonymous Chat Bot",
   "main": "api/bot.js",
   "scripts": {
