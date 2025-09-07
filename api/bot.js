@@ -98,7 +98,6 @@ const redisHelpers = {
       for (const userId of userIds) {
         const userData = await redis.get(`search:${userId}`);
         if (userData) {
-          // Проверяем, является ли userData строкой
           if (typeof userData === 'string') {
             try {
               queue[userId] = JSON.parse(userData);
@@ -106,13 +105,9 @@ const redisHelpers = {
               console.error('Error parsing user data from queue, removing:', e);
               await redisHelpers.removeFromSearchQueue(userId);
             }
-          } 
-          // Если данные уже объект (может случиться в некоторых случаях)
-          else if (typeof userData === 'object' && userData !== null) {
+          } else if (typeof userData === 'object' && userData !== null) {
             queue[userId] = userData;
-          }
-          // Неизвестный формат
-          else {
+          } else {
             console.error('Unexpected data format in search queue:', typeof userData);
             await redisHelpers.removeFromSearchQueue(userId);
           }
@@ -186,18 +181,15 @@ async function findChatPartner(userId, userData) {
     // Ищем подходящего собеседника (исключая текущего пользователя)
     for (const [otherUserId, otherUserData] of Object.entries(queue)) {
       if (otherUserId !== userId.toString()) {
-        // Проверяем, не ищет ли пользователь сам себя
-        if (otherUserId !== userId.toString()) {
-          // Создаем чат между пользователями
-          await redisHelpers.setActiveChat(userId, otherUserId);
-          await redisHelpers.setActiveChat(otherUserId, userId);
-          
-          // Удаляем обоих из очереди поиска
-          await redisHelpers.removeFromSearchQueue(userId);
-          await redisHelpers.removeFromSearchQueue(otherUserId);
-          
-          return otherUserId;
-        }
+        // Создаем чат между пользователями
+        await redisHelpers.setActiveChat(userId, otherUserId);
+        await redisHelpers.setActiveChat(otherUserId, userId);
+        
+        // Удаляем обоих из очереди поиска
+        await redisHelpers.removeFromSearchQueue(userId);
+        await redisHelpers.removeFromSearchQueue(otherUserId);
+        
+        return otherUserId;
       }
     }
     
@@ -531,4 +523,4 @@ module.exports = async (req, res) => {
   }
 };
 
-console.log('Anonymous Chat Bot started');
+console.log('Anonymous Chat Bot started with new token');
