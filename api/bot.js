@@ -342,7 +342,7 @@ bot.command('start', async (ctx) => {
     } else if (!user.termsAccepted) {
       await ctx.reply(
         `📜 Пожалуйста, ознакомьтесь с нашими правилами:\n\n` +
-        `1. Запрещены оскорбления и угрозы\n` +
+        `1. За極端
         `2. Запрещен спам и реклама\n` +
         `3. Запрещен контент для взрослых\n` +
         `4. Уважайте других пользователей\n\n` +
@@ -383,8 +383,23 @@ bot.on('text', async (ctx) => {
     // Проверяем, находится ли пользователь в активном чате
     const activeChat = await redisHelpers.getActiveChat(userId);
     
+    // Проверяем, является ли сообщение командой (даже в активном чате)
+    if (text === '❌ Завершить диалог') {
+      if (activeChat) {
+        await ctx.reply('Диалог завершен.', getMainMenu());
+        await ctx.telegram.sendMessage(activeChat, 'Собеседник завершил диалог.', getMainMenu());
+        
+        // Удаляем информацию о чате
+        await redisHelpers.removeActiveChat(userId);
+        await redisHelpers.removeActiveChat(activeChat);
+      } else {
+        await ctx.reply('У вас нет активного диалога.', getMainMenu());
+      }
+      return;
+    }
+    
+    // Если пользователь в активном чате и это не команда, пересылаем сообщение
     if (activeChat) {
-      // Если пользователь в активном чате, пересылаем сообщение собеседнику
       try {
         await ctx.telegram.sendMessage(activeChat, `💬: ${text}`, getChatMenu());
         await ctx.reply('✅ Сообщение отправлено', getChatMenu());
@@ -438,20 +453,6 @@ bot.on('text', async (ctx) => {
               await redisHelpers.removeFromSearchQueue(userId);
             }
           }, CONFIG.SEARCH_TIMEOUT);
-        }
-        break;
-        
-      case '❌ Завершить диалог':
-        const chatPartner = await redisHelpers.getActiveChat(userId);
-        if (chatPartner) {
-          await ctx.reply('Диалог завершен.', getMainMenu());
-          await ctx.telegram.sendMessage(chatPartner, 'Собеседник завершил диалог.', getMainMenu());
-          
-          // Удаляем информацию о чате
-          await redisHelpers.removeActiveChat(userId);
-          await redisHelpers.removeActiveChat(chatPartner);
-        } else {
-          await ctx.reply('У вас нет активного диалога.', getMainMenu());
         }
         break;
         
