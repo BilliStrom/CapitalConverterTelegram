@@ -62,6 +62,7 @@ const redisHelpers = {
   // Функции для управления очередью поиска
   addToSearchQueue: async (userId, userData) => {
     try {
+      // Правильный формат для hset: ключ, поле, значение
       await redis.hset('search_queue', userId, JSON.stringify(userData));
       return true;
     } catch (error) {
@@ -432,7 +433,7 @@ bot.on('text', async (ctx) => {
           `• Доступ к расширенной статистике\n\n` +
           `Стоимость: ${CONFIG.PREMIUM_COST} руб.`,
           Markup.inlineKeyboard([
-            [Markup.button.callback('💳 Купить подписку', 'buy_premium')]
+            [Markup.button.callback('💳 Купить подпику', 'buy_premium')]
           ])
         );
         break;
