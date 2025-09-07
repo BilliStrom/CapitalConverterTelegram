@@ -62,8 +62,10 @@ const redisHelpers = {
   // Функции для управления очередью поиска
   addToSearchQueue: async (userId, userData) => {
     try {
-      // Правильный формат для hset: ключ, поле, значение
-      await redis.hset('search_queue', userId, JSON.stringify(userData));
+      // Используем set вместо hset для простоты
+      await redis.set(`search:${userId}`, JSON.stringify(userData));
+      // Добавляем пользователя в список ищущих
+      await redis.sadd('search_queue', userId.toString());
       return true;
     } catch (error) {
       console.error('Error adding to search queue:', error);
@@ -73,7 +75,8 @@ const redisHelpers = {
 
   removeFromSearchQueue: async (userId) => {
     try {
-      await redis.hdel('search_queue', userId);
+      await redis.del(`search:${userId}`);
+      await redis.srem('search_queue', userId.toString());
       return true;
     } catch (error) {
       console.error('Error removing from search queue:', error);
@@ -83,8 +86,17 @@ const redisHelpers = {
 
   getSearchQueue: async () => {
     try {
-      const queue = await redis.hgetall('search_queue');
-      return queue || {};
+      const userIds = await redis.smembers('search_queue');
+      const queue = {};
+      
+      for (const userId of userIds) {
+        const userData = await redis.get(`search:${userId}`);
+        if (userData) {
+          queue[userId] = userData;
+        }
+      }
+      
+      return queue;
     } catch (error) {
       console.error('Error getting search queue:', error);
       return {};
@@ -204,10 +216,14 @@ bot.on('callback_query', async (ctx) => {
           `4. Уважайте других пользователей\n\n` +
           `Полные правила: ${CONFIG.TERMS_URL}\n` +
           `Политика конфиденциальности: ${CONFIG.PRIVACY_URL}`,
-          Markup.inlineKeyboard([
-            [Markup.button.callback('✅ Принимаю правила', 'terms_accept')],
-            [Markup.button.callback('❌ Не принимаю', 'terms_decline')]
-          ])
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '✅ Принимаю правила', callback_data: 'terms_accept' }],
+                [{ text: '❌ Не принимаю', callback_data: 'terms_decline' }]
+              ]
+            }
+          }
         );
       }
     } else if (data === 'age_confirm_no') {
@@ -221,10 +237,14 @@ bot.on('callback_query', async (ctx) => {
         
         await ctx.editMessageText(
           'Выберите ваш пол:',
-          Markup.inlineKeyboard([
-            [Markup.button.callback('👨 Мужской', 'gender_male')],
-            [Markup.button.callback('👩 Женский', 'gender_female')]
-          ])
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '👨 Мужской', callback_data: 'gender_male' }],
+                [{ text: '👩 Женский', callback_data: 'gender_female' }]
+              ]
+            }
+          }
         );
       }
     } else if (data === 'terms_decline') {
@@ -237,7 +257,9 @@ bot.on('callback_query', async (ctx) => {
         user.gender = gender;
         await redisHelpers.setUser(userId, user);
         
-        await ctx.editMessageText(
+        // Удаляем сообщение с кнопками и отправляем новое с главным меню
+        await ctx.deleteMessage();
+        await ctx.reply(
           'Отлично! Теперь вы можете использовать все функции бота.',
           getMainMenu()
         );
@@ -433,7 +455,7 @@ bot.on('text', async (ctx) => {
           `• Доступ к расширенной статистике\n\n` +
           `Стоимость: ${CONFIG.PREMIUM_COST} руб.`,
           Markup.inlineKeyboard([
-            [Markup.button.callback('💳 Купить подпику', 'buy_premium')]
+            [Markup.button.callback('💳 Купить подписку', 'buy_premium')]
           ])
         );
         break;
