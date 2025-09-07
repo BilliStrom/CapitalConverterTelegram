@@ -43,7 +43,14 @@ const redisHelpers = {
       
       // Проверяем, является ли data строкой
       if (typeof data === 'string') {
-        return JSON.parse(data);
+        try {
+          return JSON.parse(data);
+        } catch (parseError) {
+          console.error('Failed to parse user data, deleting corrupted data:', parseError);
+          // Удаляем поврежденные данные
+          await redis.del(`user:${userId}`);
+          return null;
+        }
       } 
       // Если data уже объект, возвращаем его
       else if (typeof data === 'object' && data !== null) {
@@ -72,6 +79,98 @@ function getMainMenu() {
 
 // Инициализация бота
 const bot = new Telegraf(process.env.BOT_TOKEN);
+
+// Добавим обработчик для всех callback-запросов
+bot.on('callback_query', async (ctx) => {
+  try {
+    // Отвечаем на callback запрос сразу
+    await ctx.answerCbQuery();
+    
+    // Получаем данные из callback
+    const data = ctx.callbackQuery.data;
+    const userId = ctx.from.id;
+    
+    // Обрабатываем разные типы callback данных
+    if (data === 'age_confirm_yes') {
+      const user = await redisHelpers.getUser(userId);
+      
+      if (user) {
+        user.ageVerified = true;
+        await redisHelpers.setUser(userId, user);
+        
+        // Запрашиваем принятие правил
+        await ctx.editMessageText(
+          `📜 Пожалуйста, ознакомьтесь с нашими правилами:\n\n` +
+          `1. Запрещены оскорбления и угрозы\n` +
+          `2. Запрещен спам и реклама\n` +
+          `3. Запрещен контент для взрослых\n` +
+          `4. Уважайте других пользователей\n\n` +
+          `Полные правила: ${CONFIG.TERMS_URL}\n` +
+          `Политика конфиденциальности: ${CONFIG.PRIVACY_URL}`,
+          Markup.inlineKeyboard([
+            [Markup.button.callback('✅ Принимаю правила', 'terms_accept')],
+            [Markup.button.callback('❌ Не принимаю', 'terms_decline')]
+          ])
+        );
+      }
+    } 
+    else if (data === 'age_confirm_no') {
+      await ctx.editMessageText('❌ Извините, этот сервис предназначен только для совершеннолетних пользователей.');
+    }
+    else if (data === 'terms_accept') {
+      const user = await redisHelpers.getUser(userId);
+      
+      if (user) {
+        user.termsAccepted = true;
+        await redisHelpers.setUser(userId, user);
+        
+        // Запрашиваем пол
+        await ctx.editMessageText(
+          'Выберите ваш пол:',
+          Markup.inlineKeyboard([
+            [Markup.button.callback('👨 Мужской', 'gender_male')],
+            [Markup.button.callback('👩 Женский', 'gender_female')]
+          ])
+        );
+      }
+    }
+    else if (data === 'terms_decline') {
+      await ctx.editMessageText('❌ Для использования сервиса необходимо принять правила. Если передумаете - запустите бота снова командой /start');
+    }
+    else if (data.startsWith('gender_')) {
+      const gender = data.replace('gender_', '');
+      const user = await redisHelpers.getUser(userId);
+      
+      if (user) {
+        user.gender = gender;
+        await redisHelpers.setUser(userId, user);
+        
+        // Показываем главное меню
+        await ctx.editMessageText(
+          'Отлично! Теперь вы можете использовать все функции бота.',
+          getMainMenu()
+        );
+      }
+    }
+    else if (data === 'start_registration') {
+      await ctx.deleteMessage();
+      await ctx.reply(
+        'Для использования бота вам должно быть больше 18 лет.',
+        Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Да, мне есть 18 лет', 'age_confirm_yes')],
+          [Markup.button.callback('❌ Нет', 'age_confirm_no')]
+        ])
+      );
+    }
+  } catch (error) {
+    console.error('Error in callback query handler:', error);
+    try {
+      await ctx.answerCbQuery('❌ Произошла ошибка');
+    } catch (e) {
+      console.error('Failed to answer callback query:', e);
+    }
+  }
+});
 
 // Команда /start - начальная точка
 bot.command('start', async (ctx) => {
@@ -150,108 +249,6 @@ bot.command('start', async (ctx) => {
   }
 });
 
-// Обработка подтверждения возраста
-bot.action('age_confirm_yes', async (ctx) => {
-  try {
-    await ctx.answerCbQuery(); // Важно: отвечаем на callback запрос
-    const userId = ctx.from.id;
-    const user = await redisHelpers.getUser(userId);
-    
-    if (user) {
-      user.ageVerified = true;
-      await redisHelpers.setUser(userId, user);
-      
-      // Запрашиваем принятие правил
-      await ctx.editMessageText(
-        `📜 Пожалуйста, ознакомьтесь с нашими правилами:\n\n` +
-        `1. Запрещены оскорбления и угрозы\n` +
-        `2. Запрещен спам и реклама\n` +
-        `3. Запрещен контент для взрослых\n` +
-        `4. Уважайте других пользователей\n\n` +
-        `Полные правила: ${CONFIG.TERMS_URL}\n` +
-        `Политика конфиденциальности: ${CONFIG.PRIVACY_URL}`,
-        Markup.inlineKeyboard([
-          [Markup.button.callback('✅ Принимаю правила', 'terms_accept')],
-          [Markup.button.callback('❌ Не принимаю', 'terms_decline')]
-        ])
-      );
-    }
-  } catch (error) {
-    console.error('Error in age confirmation:', error);
-    await ctx.answerCbQuery('❌ Произошла ошибка');
-  }
-});
-
-bot.action('age_confirm_no', async (ctx) => {
-  try {
-    await ctx.answerCbQuery();
-    await ctx.editMessageText('❌ Извините, этот сервис предназначен только для совершеннолетних пользователей.');
-  } catch (error) {
-    console.error('Error in age rejection:', error);
-    await ctx.answerCbQuery('❌ Произошла ошибка');
-  }
-});
-
-// Обработка принятия правил
-bot.action('terms_accept', async (ctx) => {
-  try {
-    await ctx.answerCbQuery();
-    const userId = ctx.from.id;
-    const user = await redisHelpers.getUser(userId);
-    
-    if (user) {
-      user.termsAccepted = true;
-      await redisHelpers.setUser(userId, user);
-      
-      // Запрашиваем пол
-      await ctx.editMessageText(
-        'Выберите ваш пол:',
-        Markup.inlineKeyboard([
-          [Markup.button.callback('👨 Мужской', 'gender_male')],
-          [Markup.button.callback('👩 Женский', 'gender_female')]
-        ])
-      );
-    }
-  } catch (error) {
-    console.error('Error in terms acceptance:', error);
-    await ctx.answerCbQuery('❌ Произошла ошибка');
-  }
-});
-
-bot.action('terms_decline', async (ctx) => {
-  try {
-    await ctx.answerCbQuery();
-    await ctx.editMessageText('❌ Для использования сервиса необходимо принять правила. Если передумаете - запустите бота снова командой /start');
-  } catch (error) {
-    console.error('Error in terms rejection:', error);
-    await ctx.answerCbQuery('❌ Произошла ошибка');
-  }
-});
-
-// Обработка выбора пола
-bot.action(/^gender_(male|female)$/, async (ctx) => {
-  try {
-    await ctx.answerCbQuery();
-    const userId = ctx.from.id;
-    const gender = ctx.match[1];
-    const user = await redisHelpers.getUser(userId);
-    
-    if (user) {
-      user.gender = gender;
-      await redisHelpers.setUser(userId, user);
-      
-      // Показываем главное меню
-      await ctx.editMessageText(
-        'Отлично! Теперь вы можете использовать все функции бота.',
-        getMainMenu()
-      );
-    }
-  } catch (error) {
-    console.error('Error in gender selection:', error);
-    await ctx.answerCbQuery('❌ Произошла ошибка');
-  }
-});
-
 // Обработка текстовых сообщений
 bot.on('text', async (ctx) => {
   try {
@@ -321,30 +318,6 @@ bot.on('text', async (ctx) => {
     console.error('Error in text processing:', error);
     await ctx.reply('❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.');
   }
-});
-
-// Обработчик для кнопки начала регистрации
-bot.action('start_registration', async (ctx) => {
-  try {
-    await ctx.answerCbQuery();
-    await ctx.deleteMessage();
-    await ctx.reply(
-      'Для использования бота вам должно быть больше 18 лет.',
-      Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Да, мне есть 18 лет', 'age_confirm_yes')],
-        [Markup.button.callback('❌ Нет', 'age_confirm_no')]
-      ])
-    );
-  } catch (error) {
-    console.error('Error in start registration:', error);
-    await ctx.answerCbQuery('❌ Произошла ошибка');
-  }
-});
-
-// Включение обработки callback-запросов
-bot.on('callback_query', async (ctx) => {
-  // Эта строка важна - она позволяет другим обработчикам работать
-  return ctx.answerCbQuery();
 });
 
 // Обработчик для Vercel
