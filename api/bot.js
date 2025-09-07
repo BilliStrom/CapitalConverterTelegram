@@ -24,7 +24,9 @@ const CONFIG = {
 const redisHelpers = {
   setUser: async (userId, data) => {
     try {
-      await redis.set(`user:${userId}`, JSON.stringify(data));
+      // Преобразуем данные в строку JSON
+      const userData = JSON.stringify(data);
+      await redis.set(`user:${userId}`, userData);
       return true;
     } catch (error) {
       console.error('Error setting user:', error);
@@ -35,7 +37,23 @@ const redisHelpers = {
   getUser: async (userId) => {
     try {
       const data = await redis.get(`user:${userId}`);
-      return data ? JSON.parse(data) : null;
+      
+      // Если данных нет, возвращаем null
+      if (!data) return null;
+      
+      // Проверяем, является ли data строкой
+      if (typeof data === 'string') {
+        return JSON.parse(data);
+      } 
+      // Если data уже объект, возвращаем его
+      else if (typeof data === 'object' && data !== null) {
+        return data;
+      }
+      // Во всех остальных случаях возвращаем null
+      else {
+        console.error('Invalid user data format:', data);
+        return null;
+      }
     } catch (error) {
       console.error('Error getting user:', error);
       return null;
