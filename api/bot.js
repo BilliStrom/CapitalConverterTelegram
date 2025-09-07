@@ -10,7 +10,7 @@ const redis = new Redis({
 // Конфигурация
 const CONFIG = {
   ADMIN_ID: process.env.ADMIN_ID || 5948326124,
-  FREE_SEARCH_LIMIT: 3,
+  FREE_SEARCH_LIMIT: 100,
   PREMIUM_COST: 100,
   SESSION_TIMEOUT: 600000,
   CHAT_TIMEOUT: 1800000,
