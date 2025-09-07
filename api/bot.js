@@ -62,9 +62,15 @@ const redisHelpers = {
   // Функции для управления очередью поиска
   addToSearchQueue: async (userId, userData) => {
     try {
-      // Сохраняем данные пользователя отдельно
-      await redis.set(`search:${userId}`, JSON.stringify(userData));
-      // Добавляем пользователя в список ищущих
+      // Сохраняем только основные данные пользователя для поиска
+      const searchData = {
+        id: userData.id,
+        gender: userData.gender,
+        username: userData.username,
+        first_name: userData.first_name
+      };
+      
+      await redis.set(`search:${userId}`, JSON.stringify(searchData));
       await redis.sadd('search_queue', userId.toString());
       return true;
     } catch (error) {
@@ -92,10 +98,22 @@ const redisHelpers = {
       for (const userId of userIds) {
         const userData = await redis.get(`search:${userId}`);
         if (userData) {
-          try {
-            queue[userId] = JSON.parse(userData);
-          } catch (e) {
-            console.error('Error parsing user data from queue, removing:', e);
+          // Проверяем, является ли userData строкой
+          if (typeof userData === 'string') {
+            try {
+              queue[userId] = JSON.parse(userData);
+            } catch (e) {
+              console.error('Error parsing user data from queue, removing:', e);
+              await redisHelpers.removeFromSearchQueue(userId);
+            }
+          } 
+          // Если данные уже объект (может случиться в некоторых случаях)
+          else if (typeof userData === 'object' && userData !== null) {
+            queue[userId] = userData;
+          }
+          // Неизвестный формат
+          else {
+            console.error('Unexpected data format in search queue:', typeof userData);
             await redisHelpers.removeFromSearchQueue(userId);
           }
         }
@@ -121,7 +139,8 @@ const redisHelpers = {
 
   getActiveChat: async (userId) => {
     try {
-      return await redis.get(`chat:${userId}`);
+      const partnerId = await redis.get(`chat:${userId}`);
+      return partnerId || null;
     } catch (error) {
       console.error('Error getting active chat:', error);
       return null;
