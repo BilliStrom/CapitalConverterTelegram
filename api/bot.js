@@ -62,7 +62,7 @@ const redisHelpers = {
   // Функции для управления очередью поиска
   addToSearchQueue: async (userId, userData) => {
     try {
-      // Используем set вместо hset для простоты
+      // Сохраняем данные пользователя отдельно
       await redis.set(`search:${userId}`, JSON.stringify(userData));
       // Добавляем пользователя в список ищущих
       await redis.sadd('search_queue', userId.toString());
@@ -92,7 +92,12 @@ const redisHelpers = {
       for (const userId of userIds) {
         const userData = await redis.get(`search:${userId}`);
         if (userData) {
-          queue[userId] = userData;
+          try {
+            queue[userId] = JSON.parse(userData);
+          } catch (e) {
+            console.error('Error parsing user data from queue, removing:', e);
+            await redisHelpers.removeFromSearchQueue(userId);
+          }
         }
       }
       
@@ -160,25 +165,19 @@ async function findChatPartner(userId, userData) {
     const queue = await redisHelpers.getSearchQueue();
     
     // Ищем подходящего собеседника (исключая текущего пользователя)
-    for (const [otherUserId, otherUserDataStr] of Object.entries(queue)) {
+    for (const [otherUserId, otherUserData] of Object.entries(queue)) {
       if (otherUserId !== userId.toString()) {
-        try {
-          const otherUserData = JSON.parse(otherUserDataStr);
+        // Проверяем, не ищет ли пользователь сам себя
+        if (otherUserId !== userId.toString()) {
+          // Создаем чат между пользователями
+          await redisHelpers.setActiveChat(userId, otherUserId);
+          await redisHelpers.setActiveChat(otherUserId, userId);
           
-          // Проверяем, не ищет ли пользователь сам себя
-          if (otherUserId !== userId.toString()) {
-            // Создаем чат между пользователями
-            await redisHelpers.setActiveChat(userId, otherUserId);
-            await redisHelpers.setActiveChat(otherUserId, userId);
-            
-            // Удаляем обоих из очереди поиска
-            await redisHelpers.removeFromSearchQueue(userId);
-            await redisHelpers.removeFromSearchQueue(otherUserId);
-            
-            return otherUserId;
-          }
-        } catch (e) {
-          console.error('Error parsing user data from queue:', e);
+          // Удаляем обоих из очереди поиска
+          await redisHelpers.removeFromSearchQueue(userId);
+          await redisHelpers.removeFromSearchQueue(otherUserId);
+          
+          return otherUserId;
         }
       }
     }
