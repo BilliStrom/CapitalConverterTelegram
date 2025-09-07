@@ -135,7 +135,7 @@ bot.command('start', async (ctx) => {
 // Обработка подтверждения возраста
 bot.action('age_confirm_yes', async (ctx) => {
   try {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery(); // Важно: отвечаем на callback запрос
     const userId = ctx.from.id;
     const user = await redisHelpers.getUser(userId);
     
@@ -152,14 +152,10 @@ bot.action('age_confirm_yes', async (ctx) => {
         `4. Уважайте других пользователей\n\n` +
         `Полные правила: ${CONFIG.TERMS_URL}\n` +
         `Политика конфиденциальности: ${CONFIG.PRIVACY_URL}`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '✅ Принимаю правила', callback_data: 'terms_accept' }],
-              [{ text: '❌ Не принимаю', callback_data: 'terms_decline' }]
-            ]
-          }
-        }
+        Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Принимаю правила', 'terms_accept')],
+          [Markup.button.callback('❌ Не принимаю', 'terms_decline')]
+        ])
       );
     }
   } catch (error) {
@@ -192,14 +188,10 @@ bot.action('terms_accept', async (ctx) => {
       // Запрашиваем пол
       await ctx.editMessageText(
         'Выберите ваш пол:',
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '👨 Мужской', callback_data: 'gender_male' }],
-              [{ text: '👩 Женский', callback_data: 'gender_female' }]
-            ]
-          }
-        }
+        Markup.inlineKeyboard([
+          [Markup.button.callback('👨 Мужской', 'gender_male')],
+          [Markup.button.callback('👩 Женский', 'gender_female')]
+        ])
       );
     }
   } catch (error) {
@@ -329,6 +321,12 @@ bot.action('start_registration', async (ctx) => {
     console.error('Error in start registration:', error);
     await ctx.answerCbQuery('❌ Произошла ошибка');
   }
+});
+
+// Включение обработки callback-запросов
+bot.on('callback_query', async (ctx) => {
+  // Эта строка важна - она позволяет другим обработчикам работать
+  return ctx.answerCbQuery();
 });
 
 // Обработчик для Vercel
